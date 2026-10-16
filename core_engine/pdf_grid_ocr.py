@@ -161,7 +161,7 @@ class PDFGridOCREngine:
         self, raw_text: str, default_year: int = 2026
     ) -> Dict[str, Optional[str]]:
         """
-        Phân tích chuỗi số OCR từ dòng Ngày (VD: '24/07/2026', '10/8/2026', '24 07 2026', '10 1 8 1 2026').
+        Phân tích chuỗi số OCR từ dòng Ngày (Hỗ trợ chuẩn các dạng: 24.07.2026, 24/07/2026, 24 07 2026).
         """
         result = {
             "date": None,
@@ -175,80 +175,38 @@ class PDFGridOCREngine:
 
         cleaned = raw_text.strip()
 
-        # 1. Kiểm tra nếu có ghi Giờ ở cuối (VD: 9:00-10:00 hoặc 14-15)
-        time_pattern = r'(\d{1,2})\s*:\s*(\d{2})\s*[\-\~]\s*(\d{1,2})\s*:\s*(\d{2})'
-        time_match = re.search(time_pattern, cleaned)
-        date_str = cleaned
-        if time_match:
-            h1, m1 = int(time_match.group(1)), int(time_match.group(2))
-            h2, m2 = int(time_match.group(3)), int(time_match.group(4))
-            if 6 <= h1 <= 21 and 6 <= h2 <= 22:
-                result["start_time"] = f"{h1:02d}:{m1:02d}"
-                result["end_time"] = f"{h2:02d}:{m2:02d}"
-                date_str = cleaned[:time_match.start()].strip()
-
-        # 2. Tách phần Năm ở cuối chuỗi (VD: 2026, 2025, 026, 206, 26)
+        # 1. Tách phần Năm ở cuối chuỗi
         year = default_year
-        year_match = re.search(r'[/\-\.\s]*(202[4-9]|20[0-9]{2}|026|206|26)\s*$', date_str)
+        year_match = re.search(r'[/\-\.\s]*(202[4-9]|20[0-9]{2}|026|206|26)\s*$', cleaned)
         if year_match:
             y_token = re.sub(r'\D', '', year_match.group(1))
             if len(y_token) == 4 and y_token.startswith("202"):
                 year = int(y_token)
-            date_str = date_str[:year_match.start()].strip()
+            cleaned = cleaned[:year_match.start()].strip()
 
         day, month = None, None
 
-        # Chiến lược A: Có dấu '/' hoặc '.' hoặc '-' ngăn cách Ngày và Tháng
-        sep_match = re.search(r'(\d{1,2})\s*[/\-\.]+\s*(\d{1,2})', date_str)
+        # 2. Bắt dạng có dấu phân cách rõ ràng ( '/', '.', '-' )
+        sep_match = re.search(r'(\d{1,2})\s*[/\-\.]+\s*(\d{1,2})', cleaned)
         if sep_match:
             d_cand, m_cand = int(sep_match.group(1)), int(sep_match.group(2))
             if 1 <= d_cand <= 31 and 1 <= m_cand <= 12:
                 day, month = d_cand, m_cand
 
-        # Chiến lược B: Dấu '/' bị đọc thành số '1' hoặc khoảng trắng
+        # 3. Nếu không bắt được bằng dấu, gom các cụm số lại (hỗ trợ dấu chấm bị đọc thành khoảng trắng)
         if day is None:
-            norm_digits = re.sub(r'[/\-\.:]+', ' ', date_str)
-            tokens = re.findall(r'\d+', norm_digits)
-
-            if len(tokens) == 1 and len(tokens[0]) >= 5:
-                s = tokens[0]
-                s = re.sub(r'(202\d|026|26)$', '', s)
-                tokens = [s] if s else []
-
-            if len(tokens) >= 3:
-                if tokens[1] == '1' and 1 <= int(tokens[0]) <= 31 and 1 <= int(tokens[2]) <= 12:
-                    day, month = int(tokens[0]), int(tokens[2])
-                elif 1 <= int(tokens[0]) <= 31 and 1 <= int(tokens[1]) <= 12:
-                    day, month = int(tokens[0]), int(tokens[1])
-
-            elif len(tokens) == 2:
-                t0, t1 = tokens[0], tokens[1]
-                if len(t0) == 3 and t0.endswith('1') and int(t0[:2]) <= 31:
-                    t0 = t0[:2]
-                if len(t1) == 3 and t1.startswith('1') and int(t1[1:]) <= 12:
-                    t1 = t1[1:]
-                elif len(t1) == 3 and t1.endswith('1') and int(t1[:2]) <= 12:
-                    t1 = t1[:2]
-
-                if 1 <= int(t0) <= 31 and 1 <= int(t1) <= 12:
-                    day, month = int(t0), int(t1)
-
+            tokens = re.findall(r'\d+', cleaned)
+            if len(tokens) >= 2:
+                d_cand, m_cand = int(tokens[0]), int(tokens[1])
+                if 1 <= d_cand <= 31 and 1 <= m_cand <= 12:
+                    day, month = d_cand, m_cand
             elif len(tokens) == 1 and len(tokens[0]) >= 3:
                 s = tokens[0]
-                if len(s) == 5 and s[2] == '1':
-                    d_cand, m_cand = int(s[:2]), int(s[3:])
-                elif len(s) == 4:
-                    d_cand, m_cand = int(s[:2]), int(s[2:])
-                    if m_cand > 12 and s[2] == '1':
-                        d_cand, m_cand = int(s[:2]), int(s[3:])
+                if len(s) >= 4:
+                    d_cand, m_cand = int(s[:2]), int(s[2:4])
                 elif len(s) == 3:
-                    d_cand, m_cand = int(s[:2]), int(s[2:])
-                    if d_cand > 31 or m_cand == 0:
-                        d_cand, m_cand = int(s[:1]), int(s[1:])
-                else:
-                    d_cand, m_cand = 0, 0
-
-                if 1 <= d_cand <= 31 and 1 <= m_cand <= 12:
+                    d_cand, m_cand = int(s[:1]), int(s[1:])
+                if 1 <= (day or d_cand) <= 31 and 1 <= (month or m_cand) <= 12:
                     day, month = d_cand, m_cand
 
         if day is not None and month is not None:
