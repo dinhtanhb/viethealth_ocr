@@ -2,12 +2,9 @@ import os
 import re
 import warnings
 from datetime import datetime
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Tuple
 import cv2
 import numpy as np
-
-# Tắt các cảnh báo (warnings) của PyTorch và PyMuPDF
-warnings.filterwarnings("ignore")
 
 try:
     import pymupdf as fitz
@@ -21,26 +18,28 @@ class PDFGridOCREngine:
     """
     Bộ lõi xử lý trang cuối PDF Bảng Chấm Công (Offline 100%):
     - Tự động bắt khung bảng 30 ô (5 hàng x 6 cột)
-    - Khung cắt (ROI) tinh chỉnh chính xác vào dòng Ngày (tránh hoàn toàn chữ ký phụ huynh)
-    - Xử lý tách nét chữ viết tay sạch sẽ trước khi đưa vào EasyOCR
+    - Tọa độ ROI chuẩn xác (y: 19% -> 41%) lấy trọn dòng Ngày, loại bỏ 100% chữ ký Phụ huynh bên dưới
+    - Lọc tách riêng mực bút xanh sang Grayscale mềm mại cho EasyOCR
     """
 
-    def __init__(self, models_dir: str = "local_models", snippets_dir: str = "media_snippets"):
+    def __init__(self, models_dir: str = "models_storage/easyocr", snippets_dir: str = "media_snippets"):
         self.models_dir = models_dir
         self.snippets_dir = snippets_dir
         os.makedirs(self.models_dir, exist_ok=True)
         os.makedirs(self.snippets_dir, exist_ok=True)
 
-        self.reader = easyocr.Reader(
-            ['en'],
-            gpu=False,
-            model_storage_directory=self.models_dir,
-            download_enabled=True,
-            verbose=False
-        )
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            self.reader = easyocr.Reader(
+                ['en'],
+                gpu=False,
+                model_storage_directory=self.models_dir,
+                download_enabled=True,
+                verbose=False
+            )
 
     def render_last_page(self, pdf_path: str, dpi: int = 300) -> np.ndarray:
-        """Đọc file PDF và chỉ trích xuất trang cuối cùng thành ảnh OpenCV BGR."""
+        """Đọc file PDF an toàn (try/finally) và trích xuất trang cuối cùng thành ảnh BGR 300 DPI."""
         if not os.path.exists(pdf_path):
             raise FileNotFoundError(f"Không tìm thấy file PDF: {pdf_path}")
 
@@ -52,7 +51,7 @@ class PDFGridOCREngine:
             last_page = doc[-1]
             zoom = dpi / 72.0
             mat = fitz.Matrix(zoom, zoom)
-            pix = last_page.get_pixmap(matrix=mat, alpha=False)
+            pix = last_page.get_pixmap(matrix=mat, colorspace=fitz.csRGB, alpha=False)
 
             img_np = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.h, pix.w, 3)
             img_bgr = cv2.cvtColor(img_np, cv2.COLOR_RGB2BGR)
@@ -97,45 +96,73 @@ class PDFGridOCREngine:
 
         return page_img[int(h_page * 0.16):int(h_page * 0.82), int(w_page * 0.04):int(w_page * 0.96)]
 
-    def extract_handwriting_layer(self, roi_bgr: np.ndarray) -> tuple[bool, np.ndarray]:
-        """Tách riêng lớp chữ viết tay (mực xanh), loại bỏ hoàn toàn chữ in đen và dấu chấm."""
-        hsv = cv2.cvtColor(roi_bgr, cv2.COLOR_BGR2HSV)
+    def prepare_handwriting_roi(self, roi_bgr: np.ndarray) -> Tuple[bool, np.ndarray]:
+        """
+        Tách riêng lớp mực bút bi xanh trên dòng Ngày/Giờ:
+        - Loại bỏ hoàn toàn chữ in màu đen ('Ngày:', 'tại Cơ sở GD/YT', dấu chấm '..../....')
+        - Giữ nguyên độ mềm của nét bút viết tay giúp EasyOCR nhận diện chính xác từng con số.
+        """
+        b, g, r = cv2.split(roi_bgr)
+        b_int = b.astype(np.int16)
+        r_int = r.astype(np.int16)
 
-        # Dải màu mực bút bi xanh
-        lower_blue = np.array([85, 30, 30])
-        upper_blue = np.array([155, 255, 255])
-        blue_mask = cv2.inRange(hsv, lower_blue, upper_blue)
-
-        kernel_clean = np.ones((2, 2), np.uint8)
-        blue_mask = cv2.morphologyEx(blue_mask, cv2.MORPH_OPEN, kernel_clean)
-
-        blue_pixels = cv2.countNonZero(blue_mask)
+        # Mực xanh có kênh Blue vượt trội so với kênh Red
+        blue_diff = b_int - r_int
+        blue_ink_mask = (blue_diff > 20) & (b_int > 45)
+        blue_pixels = np.sum(blue_ink_mask)
         total_pixels = roi_bgr.shape[0] * roi_bgr.shape[1]
         blue_ratio = blue_pixels / float(total_pixels)
 
-        # Ngưỡng nhận diện có chữ viết tay trong ô ngày
-        if blue_ratio > 0.004:
-            dilated = cv2.dilate(blue_mask, np.ones((2, 2), np.uint8), iterations=1)
-            clean_ocr_img = 255 - dilated
-            clean_ocr_img = cv2.resize(clean_ocr_img, None, fx=2.5, fy=2.5, interpolation=cv2.INTER_CUBIC)
-            clean_ocr_img = cv2.copyMakeBorder(clean_ocr_img, 20, 20, 20, 20, cv2.BORDER_CONSTANT, value=255)
-            return True, clean_ocr_img
+        # Nếu diện tích mực xanh < 0.5% -> Ô trống (không có chữ viết tay)
+        if blue_ratio < 0.005:
+            return False, r
 
-        gray = cv2.cvtColor(roi_bgr, cv2.COLOR_BGR2GRAY)
-        _, binary_inv = cv2.threshold(gray, 160, 255, cv2.THRESH_BINARY_INV)
-        stroke_mask = cv2.morphologyEx(binary_inv, cv2.MORPH_OPEN, np.ones((3, 3), np.uint8))
-        stroke_ratio = cv2.countNonZero(stroke_mask) / float(total_pixels)
+        # Chuyển đổi độ chênh lệch mực xanh thành ảnh Grayscale nền trắng (255), chữ đen đậm (0..80)
+        ink_strength = np.clip((blue_diff - 12) * 4.8, 0, 250).astype(np.uint8)
 
-        if stroke_ratio > 0.035:
-            clean_ocr_img = 255 - binary_inv
-            clean_ocr_img = cv2.resize(clean_ocr_img, None, fx=2.5, fy=2.5, interpolation=cv2.INTER_CUBIC)
-            clean_ocr_img = cv2.copyMakeBorder(clean_ocr_img, 20, 20, 20, 20, cv2.BORDER_CONSTANT, value=255)
-            return True, clean_ocr_img
+        # Khử các hạt nhiễu li ti độc lập nhưng giữ nguyên nét số
+        kernel = np.ones((2, 2), np.uint8)
+        ink_strength = cv2.morphologyEx(ink_strength, cv2.MORPH_CLOSE, kernel)
 
-        return False, gray
+        clean_gray = 255 - ink_strength
+        clean_gray = cv2.GaussianBlur(clean_gray, (3, 3), 0)
 
-    def clean_and_parse_datetime(self, raw_text: str, default_year: int = 2026, default_month: int = 9) -> Dict[str, Optional[str]]:
-        """Làm sạch chuỗi OCR và bóc tách Ngày, Giờ chính xác."""
+        # Phóng to 2.2 lần và thêm viền trắng rộng
+        upscaled = cv2.resize(clean_gray, None, fx=2.2, fy=2.2, interpolation=cv2.INTER_CUBIC)
+        padded = cv2.copyMakeBorder(upscaled, 24, 24, 24, 24, cv2.BORDER_CONSTANT, value=255)
+
+        return True, padded
+
+    def run_ocr_on_cell(self, clean_gray_img: np.ndarray) -> str:
+        """
+        Đọc chuỗi số Ngày/Tháng/Năm từ ảnh mực xanh đã làm sạch.
+        Chỉ cho phép các ký tự số và dấu phân cách ngày/giờ để không bao giờ nhận nhầm thành chữ cái.
+        """
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            dets = self.reader.readtext(
+                clean_gray_img,
+                detail=1,
+                paragraph=False,
+                allowlist='0123456789/.-:',
+                text_threshold=0.30,
+                low_text=0.20,
+                link_threshold=0.20,
+                width_ths=0.4,
+                mag_ratio=1.5
+            )
+
+        # Sắp xếp từ trái qua phải theo trục X
+        dets.sort(key=lambda item: item[0][0][0])
+        raw_tokens = [item[1].strip() for item in dets if item[2] > 0.08 and item[1].strip()]
+        return " ".join(raw_tokens)
+
+    def clean_and_parse_datetime(
+        self, raw_text: str, default_year: int = 2026
+    ) -> Dict[str, Optional[str]]:
+        """
+        Phân tích chuỗi số OCR từ dòng Ngày (VD: '24/07/2026', '10/8/2026', '24 07 2026', '10 1 8 1 2026').
+        """
         result = {
             "date": None,
             "start_time": None,
@@ -143,74 +170,88 @@ class PDFGridOCREngine:
             "raw_ocr": raw_text.strip(),
             "warning": None
         }
-        if not raw_text or len(raw_text.strip()) < 1:
+        if not raw_text or len(raw_text.strip()) < 2:
             return result
 
-        char_map = {
-            'O': '0', 'o': '0', 'D': '0',
-            'I': '1', 'l': '1', '|': '1',
-            'Z': '2', 'z': '2',
-            'S': '5', 's': '5',
-            'B': '8',
-            'g': '9', 'q': '9',
-        }
-        cleaned = "".join(char_map.get(c, c) for c in raw_text)
+        cleaned = raw_text.strip()
 
-        found_date = False
-        day, month, year = None, None, default_year
-
-        # 1. Bắt dạng chuẩn DD/MM/YYYY hoặc DD.MM.YYYY hoặc DD-MM
-        date_pattern_sep = r'(\d{1,2})\s*[/\-\.]\s*(\d{1,2})(?:\s*[/\-\.\s]\s*(202\d|\d{2,4}))?'
-        m = re.search(date_pattern_sep, cleaned)
-        if m:
-            d_val = int(m.group(1))
-            m_val = int(m.group(2))
-            y_val = m.group(3)
-            if 1 <= d_val <= 31 and 1 <= m_val <= 12:
-                day, month = d_val, m_val
-                if y_val:
-                    y_clean = re.sub(r'\D', '', y_val)
-                    if len(y_clean) == 2:
-                        year = 2000 + int(y_clean)
-                    elif len(y_clean) == 4 and y_clean.startswith("202"):
-                        year = int(y_clean)
-                found_date = True
-
-        # 2. Bắt dạng các cụm số rời nhau do nét viết tay đứt quãng
-        if not found_date:
-            nums = [int(n) for n in re.findall(r'\d+', cleaned)]
-            if len(nums) >= 2:
-                d_val, m_val = nums[0], nums[1]
-                if len(nums) >= 3 and nums[2] > 2020:
-                    year = nums[2]
-                elif len(nums) >= 3 and 20 <= nums[2] <= 30:
-                    year = 2000 + nums[2]
-
-                if 1 <= d_val <= 31 and 1 <= m_val <= 12:
-                    day, month = d_val, m_val
-                    found_date = True
-            elif len(nums) == 1 and len(str(nums[0])) >= 3:
-                s = str(nums[0])
-                if len(s) == 4:
-                    day, month = int(s[:2]), int(s[2:])
-                elif len(s) == 3:
-                    day, month = int(s[:1]), int(s[1:])
-                if 1 <= (day or 0) <= 31 and 1 <= (month or 0) <= 12:
-                    found_date = True
-
-        # 3. Bóc Giờ bắt đầu / Giờ kết thúc: "9h-10h", "14h30-15h30", "HH:MM-HH:MM" hoặc "HH-HH"
-        time_pattern = r'(\d{1,2})\s*[:hH]\s*(\d{2})?\s*[-–—]\s*(\d{1,2})\s*[:hH]\s*(\d{2})?'
-        mt = re.search(time_pattern, cleaned)
-        if mt:
-            h1, m1 = int(mt.group(1)), int(mt.group(2) or 0)
-            h2, m2 = int(mt.group(3)), int(mt.group(4) or 0)
-            if 0 <= h1 <= 24 and 0 <= h2 <= 24 and 0 <= m1 <= 59 and 0 <= m2 <= 59:
+        # 1. Kiểm tra nếu có ghi Giờ ở cuối (VD: 9:00-10:00 hoặc 14-15)
+        time_pattern = r'(\d{1,2})\s*:\s*(\d{2})\s*[\-\~]\s*(\d{1,2})\s*:\s*(\d{2})'
+        time_match = re.search(time_pattern, cleaned)
+        date_str = cleaned
+        if time_match:
+            h1, m1 = int(time_match.group(1)), int(time_match.group(2))
+            h2, m2 = int(time_match.group(3)), int(time_match.group(4))
+            if 6 <= h1 <= 21 and 6 <= h2 <= 22:
                 result["start_time"] = f"{h1:02d}:{m1:02d}"
                 result["end_time"] = f"{h2:02d}:{m2:02d}"
+                date_str = cleaned[:time_match.start()].strip()
 
-        if found_date and day:
-            if not month or not (1 <= month <= 12):
-                month = default_month
+        # 2. Tách phần Năm ở cuối chuỗi (VD: 2026, 2025, 026, 206, 26)
+        year = default_year
+        year_match = re.search(r'[/\-\.\s]*(202[4-9]|20[0-9]{2}|026|206|26)\s*$', date_str)
+        if year_match:
+            y_token = re.sub(r'\D', '', year_match.group(1))
+            if len(y_token) == 4 and y_token.startswith("202"):
+                year = int(y_token)
+            date_str = date_str[:year_match.start()].strip()
+
+        day, month = None, None
+
+        # Chiến lược A: Có dấu '/' hoặc '.' hoặc '-' ngăn cách Ngày và Tháng
+        sep_match = re.search(r'(\d{1,2})\s*[/\-\.]+\s*(\d{1,2})', date_str)
+        if sep_match:
+            d_cand, m_cand = int(sep_match.group(1)), int(sep_match.group(2))
+            if 1 <= d_cand <= 31 and 1 <= m_cand <= 12:
+                day, month = d_cand, m_cand
+
+        # Chiến lược B: Dấu '/' bị đọc thành số '1' hoặc khoảng trắng
+        if day is None:
+            norm_digits = re.sub(r'[/\-\.:]+', ' ', date_str)
+            tokens = re.findall(r'\d+', norm_digits)
+
+            if len(tokens) == 1 and len(tokens[0]) >= 5:
+                s = tokens[0]
+                s = re.sub(r'(202\d|026|26)$', '', s)
+                tokens = [s] if s else []
+
+            if len(tokens) >= 3:
+                if tokens[1] == '1' and 1 <= int(tokens[0]) <= 31 and 1 <= int(tokens[2]) <= 12:
+                    day, month = int(tokens[0]), int(tokens[2])
+                elif 1 <= int(tokens[0]) <= 31 and 1 <= int(tokens[1]) <= 12:
+                    day, month = int(tokens[0]), int(tokens[1])
+
+            elif len(tokens) == 2:
+                t0, t1 = tokens[0], tokens[1]
+                if len(t0) == 3 and t0.endswith('1') and int(t0[:2]) <= 31:
+                    t0 = t0[:2]
+                if len(t1) == 3 and t1.startswith('1') and int(t1[1:]) <= 12:
+                    t1 = t1[1:]
+                elif len(t1) == 3 and t1.endswith('1') and int(t1[:2]) <= 12:
+                    t1 = t1[:2]
+
+                if 1 <= int(t0) <= 31 and 1 <= int(t1) <= 12:
+                    day, month = int(t0), int(t1)
+
+            elif len(tokens) == 1 and len(tokens[0]) >= 3:
+                s = tokens[0]
+                if len(s) == 5 and s[2] == '1':
+                    d_cand, m_cand = int(s[:2]), int(s[3:])
+                elif len(s) == 4:
+                    d_cand, m_cand = int(s[:2]), int(s[2:])
+                    if m_cand > 12 and s[2] == '1':
+                        d_cand, m_cand = int(s[:2]), int(s[3:])
+                elif len(s) == 3:
+                    d_cand, m_cand = int(s[:2]), int(s[2:])
+                    if d_cand > 31 or m_cand == 0:
+                        d_cand, m_cand = int(s[:1]), int(s[1:])
+                else:
+                    d_cand, m_cand = 0, 0
+
+                if 1 <= d_cand <= 31 and 1 <= m_cand <= 12:
+                    day, month = d_cand, m_cand
+
+        if day is not None and month is not None:
             result["date"] = f"{day:02d}/{month:02d}/{year}"
 
         return result
@@ -243,12 +284,12 @@ class PDFGridOCREngine:
                 cell_img = table_img[y1:y2, x1:x2]
                 ch, cw = cell_img.shape[:2]
 
-                # 👉 ĐIỀU CHỈNH VÙNG ROI TẬP TRUNG CHÍNH XÁC VÀO DÒNG NGÀY (TRÁNH CHỮ KÝ PHÍA DƯỚI)
-                roi_y1, roi_y2 = int(ch * 0.34), int(ch * 0.52)
-                roi_x1, roi_x2 = int(cw * 0.15), int(cw * 0.95)
+                # TỌA ĐỘ CHUẨN XÁC CỦA DÒNG NGÀY TRÊN PHIẾU (y: 19% -> 41%)
+                roi_y1, roi_y2 = int(ch * 0.19), int(ch * 0.41)
+                roi_x1, roi_x2 = int(cw * 0.16), int(cw * 0.92)
                 date_roi = cell_img[roi_y1:roi_y2, roi_x1:roi_x2]
 
-                has_handwriting, clean_ocr_img = self.extract_handwriting_layer(date_roi)
+                has_handwriting, clean_ocr_img = self.prepare_handwriting_roi(date_roi)
 
                 cv2.rectangle(debug_canvas, (x1, y1), (x2, y2), (230, 180, 0), 1)
                 if has_handwriting:
@@ -262,20 +303,16 @@ class PDFGridOCREngine:
                 if not has_handwriting:
                     continue
 
-                ocr_results = self.reader.readtext(
-                    clean_ocr_img,
-                    detail=0,
-                    allowlist='0123456789/:-.',
-                    width_ths=0.8,
-                    mag_ratio=2.0
-                )
-                raw_text = " ".join(ocr_results).strip()
+                raw_text = self.run_ocr_on_cell(clean_ocr_img)
                 parsed = self.clean_and_parse_datetime(raw_text)
 
-                snippet_display = cell_img[int(ch * 0.28):int(ch * 0.58), int(cw * 0.02):int(cw * 0.98)]
+                snippet_display = cell_img[int(ch * 0.16):int(ch * 0.46), int(cw * 0.02):int(cw * 0.96)]
                 snippet_name = f"{prefix}_box_{box_num:02d}.jpg"
                 snippet_path = os.path.join(self.snippets_dir, snippet_name)
                 cv2.imwrite(snippet_path, snippet_display)
+
+                clean_debug_path = os.path.join(self.snippets_dir, f"_clean_box_{box_num:02d}.jpg")
+                cv2.imwrite(clean_debug_path, clean_ocr_img)
 
                 extracted_sessions.append({
                     "box_number": box_num,
