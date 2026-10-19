@@ -111,8 +111,7 @@ viethealth_ocr/
 │   ├── path_parser.py          # Bóc tách metadata (kỳ/nhóm/CB/trẻ/dịch vụ) từ đường dẫn OneDrive
 │   ├── pdf_grid_ocr.py         # Lõi OCR: phân tích hình học, 2 luồng Kiểu A / Kiểu B, chuẩn hóa ngày giờ
 │   ├── local_db.py             # SQLite: documents + sessions, migration, bảo toàn dữ liệu đã xác nhận
-│   ├── excel_exporter.py       # Xuất báo cáo .xlsx
-│   └── batch_scanner.py        # Quét đệ quy thư mục PDF theo callback (API bổ trợ)
+│   └── excel_exporter.py       # Xuất báo cáo .xlsx
 ├── docs/                       # Tài liệu thiết kế & kế hoạch
 ├── bench_auto_read.py          # Đo tỷ lệ AI tự đọc ngày trên dữ liệu thật
 ├── test_step1_ocr.py           # Smoke test 1 file PDF

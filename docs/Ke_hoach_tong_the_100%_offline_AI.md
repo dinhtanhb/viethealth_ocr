@@ -38,8 +38,7 @@ viethealth_ocr/                     # THƯ MỤC GỐC DỰ ÁN (trạng thái �
 │   ├── path_parser.py              # 1. Bóc tách metadata (kỳ/nhóm/CB/trẻ/dịch vụ) từ đường dẫn OneDrive
 │   ├── pdf_grid_ocr.py             # 2. PyMuPDF + OpenCV + EasyOCR: phân tích hình học, 2 luồng Kiểu A/Kiểu B, chuẩn hóa Ngày/Giờ
 │   ├── local_db.py                 # 3. SQLite: documents + sessions, migration an toàn, bảo toàn dữ liệu đã xác nhận
-│   ├── excel_exporter.py           # 4. Xuất báo cáo .xlsx
-│   └── batch_scanner.py            # 5. Quét đệ quy thư mục PDF theo callback (API bổ trợ)
+│   └── excel_exporter.py           # 4. Xuất báo cáo .xlsx
 │
 ├── web_app.py                      # GIAO DIỆN: Django single-file (settings in-process + HTML template inline)
 ├── docs/                           # Tài liệu thiết kế & kế hoạch

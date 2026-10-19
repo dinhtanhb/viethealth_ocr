@@ -35,7 +35,7 @@ AI tự đọc **> 90%** ngày viết tay trên PDF chấm công can thiệp →
 ## Kiến trúc nhanh
 
 * `web_app.py` — Django **single-file app**: settings in-process, template HTML trong biến chuỗi `HTML_TEMPLATE`, routes ở `urlpatterns`. Endpoint: `/`, `/scan/`, `/save-all/`, `/export-excel/`, `/snippet/<filename>`.
-* `core_engine/` — lõi **không import Django**: `path_parser.py` (metadata từ đường dẫn OneDrive), `pdf_grid_ocr.py` (hình học + OCR + chuẩn hóa ngày giờ), `local_db.py` (SQLite + migration an toàn), `excel_exporter.py`, `batch_scanner.py`.
+* `core_engine/` — lõi **không import Django**: `path_parser.py` (metadata từ đường dẫn OneDrive), `pdf_grid_ocr.py` (hình học + OCR + chuẩn hóa ngày giờ), `local_db.py` (SQLite + migration an toàn), `excel_exporter.py` (xuất .xlsx).
 * `core_engine` không có `__init__.py` (implicit namespace package).
 * Comment/docstring viết **bằng tiếng Việt**.
 
