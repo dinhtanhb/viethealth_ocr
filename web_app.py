@@ -1,6 +1,7 @@
 import os
 import sys
 import django
+from urllib.parse import urlencode
 from django.conf import settings
 from django.core.management import execute_from_command_line
 from django.http import HttpResponse, JsonResponse, FileResponse, Http404
@@ -77,7 +78,10 @@ HTML_TEMPLATE = """
         .inp-time { width: 68px; padding: 6px; text-align: center; border: 1px solid #aaa; border-radius: 4px; font-size: 13.5px; }
         .badge-ok { background: #d4edda; color: #155724; padding: 4px 8px; border-radius: 4px; font-weight: 600; font-size: 12px; }
         .badge-warn { background: #fff3cd; color: #856404; padding: 4px 8px; border-radius: 4px; font-weight: 600; font-size: 12px; }
+        .badge-bad { background: #f8d7da; color: #842029; padding: 4px 8px; border-radius: 4px; font-weight: 600; font-size: 12px; }
         .left { text-align: left !important; }
+        .conf-pill { font-size: 11.5px; color: #1f4e78; font-weight: 700; }
+        .chk-confirm { width: 17px; height: 17px; cursor: pointer; }
     </style>
 </head>
 <body>
@@ -94,7 +98,9 @@ HTML_TEMPLATE = """
             <button type="submit" class="btn btn-primary">🔍 Quét AI OCR (PDF / Thư mục)</button>
         </form>
         <div style="margin-top:6px; font-size:12.5px; color:#555;">
-            💡 <b>Mẹo:</b> Rê chuột vào <b>Ảnh cắt chữ viết tay</b> để phóng to 2.5x. Sau khi sửa Ngày/Giờ trên bảng, nhấn <b>Lưu toàn bộ thay đổi</b> trước khi xuất Excel.
+            💡 <b>Mẹo:</b> AI tự đọc & điền Ngày vào từng dòng. Rê chuột vào <b>Ảnh cắt chữ viết tay</b> để phóng to 2.5x.
+            Dòng <span class="badge-warn">🟡</span> / <span class="badge-bad">🔴</span> cần bạn kiểm tra kỹ.
+            Tích ☑️ <b>Xác nhận</b> (hoặc sửa Ngày/Giờ) rồi nhấn <b>Lưu toàn bộ thay đổi</b> trước khi xuất Excel.
         </div>
     </div>
 
@@ -121,17 +127,19 @@ HTML_TEMPLATE = """
                     <th>Giờ BĐ</th>
                     <th>Giờ KT</th>
                     <th>Raw OCR</th>
+                    <th>Độ tin cậy AI</th>
                     <th>Trạng thái</th>
+                    <th>Xác nhận</th>
                 </tr>
             </thead>
             <tbody>
                 {% for r in records %}
-                <tr class="{% if not r.date %}row-warn{% endif %}">
+                <tr class="{% if not r.date or r.ocr_confidence < 0.3 %}row-warn{% endif %}">
                     <td>{{ forloop.counter }}</td>
                     <td><b>{{ r.period }}</b><br><span style="color:#555">{{ r.group }}</span></td>
                     <td class="left"><b>[{{ r.staff_id }}]</b><br>{{ r.staff_name }}</td>
                     <td class="left"><b>[{{ r.child_id }}]</b> {{ r.child_name }}<br><span class="badge-ok">{{ r.service }}</span></td>
-                    <td>Buổi {{ r.session_order }}<br><small style="color:#666">(Ô #{{ r.box_number }})</small></td>
+                    <td>Buổi {{ r.session_order }}<br><small style="color:#666">(Ô/Trang #{{ r.box_number }})</small></td>
                     <td>
                         {% if r.snippet_name %}
                         <img src="/snippet/{{ r.snippet_name }}" class="snippet-img" alt="snippet"/>
@@ -149,16 +157,25 @@ HTML_TEMPLATE = """
                     </td>
                     <td><small style="color:#666; font-family:monospace;">{{ r.raw_ocr }}</small></td>
                     <td>
-                        {% if r.date %}
-                            <span class="badge-ok">🟢 Đã có Ngày</span>
+                        {% if r.date %}<span class="conf-pill">{{ r.ocr_confidence|floatformat:2 }}</span>{% else %}—{% endif %}
+                    </td>
+                    <td>
+                        {% if not r.date %}
+                            <span class="badge-bad">🔴 Chưa đọc được – nhập tay</span>
+                        {% elif r.ocr_confidence >= 0.45 %}
+                            <span class="badge-ok">🟢 AI tự đọc chắc chắn</span>
                         {% else %}
-                            <span class="badge-warn">🟡 Cần nhập/kiểm tra</span>
+                            <span class="badge-warn">🟡 Tin cậy thấp – cần soát</span>
                         {% endif %}
+                    </td>
+                    <td>
+                        <input type="checkbox" name="confirm_{{ r.session_id }}" value="1" class="chk-confirm"
+                               {% if r.is_verified and r.date %}checked{% endif %} title="Tích khi bạn đã đối chiếu ảnh và xác nhận Ngày này" />
                     </td>
                 </tr>
                 {% empty %}
                 <tr>
-                    <td colspan="11" style="padding: 30px; color: #777;">
+                    <td colspan="13" style="padding: 30px; color: #777;">
                         Chưa có dữ liệu. Hãy dán đường dẫn File PDF hoặc Thư mục vào ô phía trên và bấm <b>Quét AI OCR</b>!
                     </td>
                 </tr>
@@ -193,7 +210,7 @@ def scan_view(request):
     if request.method == "POST":
         target_path = request.POST.get("target_path", "").strip().strip('"')
         if not os.path.exists(target_path):
-            return redirect(f"/?msg=❌ Không tìm thấy đường dẫn: {target_path}&path={target_path}")
+            return redirect("/?" + urlencode({"msg": f"❌ Không tìm thấy đường dẫn: {target_path}", "path": target_path}))
 
         pdf_files = []
         if os.path.isfile(target_path) and target_path.lower().endswith(".pdf"):
@@ -207,15 +224,28 @@ def scan_view(request):
         engine = get_ocr_engine()
         scanned_count = 0
         total_sessions = 0
+        total_with_date = 0
         for pdf_file in pdf_files:
             meta = VietHealthPathParser.parse(pdf_file)
             prefix = f"{meta.get('child_id') or 'DOC'}_{scanned_count + 1}"
-            sessions = engine.process_pdf(pdf_file, prefix=prefix)
+            sessions = engine.process_pdf(pdf_file, prefix=prefix, period_folder=meta.get("period"))
             db.save_document_and_sessions(meta, sessions)
             scanned_count += 1
             total_sessions += len(sessions)
+            total_with_date += sum(1 for s in sessions if s.get("date"))
 
-        return redirect(f"/?msg=✅ Đã quét xong {scanned_count} file PDF ({total_sessions} buổi can thiệp)!&path={target_path}")
+        if total_sessions:
+            pct = round(total_with_date * 100.0 / total_sessions)
+            coverage = f" | 🤖 AI tự đọc & điền Ngày: {total_with_date}/{total_sessions} ô ({pct}%)"
+            if pct < 90:
+                coverage += " ⚠️ Dưới 90%, vui lòng soát các dòng vàng/đỏ"
+        else:
+            coverage = " | ⚠️ Không phát hiện ô chữ viết tay nào"
+
+        return redirect("/?" + urlencode({
+            "msg": f"✅ Đã quét xong {scanned_count} file PDF ({total_sessions} buổi can thiệp)!{coverage}",
+            "path": target_path,
+        }))
     return redirect("/")
 
 
@@ -226,8 +256,9 @@ def save_all_view(request):
             d_val = request.POST.get(f"date_{sid}", "")
             st_val = request.POST.get(f"start_{sid}", "")
             et_val = request.POST.get(f"end_{sid}", "")
-            db.update_session(int(sid), d_val, st_val, et_val)
-        return redirect("/?msg=💾 Đã lưu thành công toàn bộ thông tin Ngày & Giờ!")
+            confirmed = request.POST.get(f"confirm_{sid}") == "1"
+            db.update_session(int(sid), d_val, st_val, et_val, verified=confirmed)
+        return redirect("/?msg=💾 Đã lưu thành công toàn bộ thông tin Ngày và Giờ (kèm trạng thái xác nhận)!")
     return redirect("/")
 
 

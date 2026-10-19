@@ -52,6 +52,10 @@ class LocalOCRDatabase:
                     FOREIGN KEY(doc_id) REFERENCES pdf_documents(id) ON DELETE CASCADE
                 )
             """)
+            # Migration an toàn: thêm cột confidence cho bản ghi cũ (SQLite không có IF NOT EXISTS cho ALTER)
+            columns = [row["name"] for row in conn.execute("PRAGMA table_info(intervention_sessions)").fetchall()]
+            if "ocr_confidence" not in columns:
+                conn.execute("ALTER TABLE intervention_sessions ADD COLUMN ocr_confidence REAL DEFAULT 0")
             conn.commit()
 
     def save_document_and_sessions(self, meta: Dict, sessions: List[Dict]) -> int:
@@ -89,25 +93,57 @@ class LocalOCRDatabase:
             cur.execute("SELECT id FROM pdf_documents WHERE file_path = ?", (meta.get("file_path"),))
             doc_id = cur.fetchone()["id"]
 
-            # Xóa các phiên cũ của file này trước khi ghi mới
+            # BAO TOAN du lieu nguoi dung da xac nhan: luu lai cac dong is_verified=1 theo box_number
+            # truoc khi xoa, de quet lai PDF khong ghi de ngay/gio con nguoi da duyet tay.
+            cur.execute(
+                "SELECT box_number, date_str, start_time, end_time FROM intervention_sessions "
+                "WHERE doc_id = ? AND is_verified = 1",
+                (doc_id,),
+            )
+            human_confirmed = {
+                row["box_number"]: {
+                    "date_str": row["date_str"],
+                    "start_time": row["start_time"],
+                    "end_time": row["end_time"],
+                }
+                for row in cur.fetchall()
+            }
+
+            # Xoa cac phien cuu cua file nay truoc khi ghi moi
             cur.execute("DELETE FROM intervention_sessions WHERE doc_id = ?", (doc_id,))
 
             for idx, s in enumerate(sessions, start=1):
+                box = s.get("box_number")
+                saved = human_confirmed.get(box)
+                if saved:
+                    # Khuc phuc ngay/gio con nguoi da xac nhan, giu nguyen dau da duyet
+                    date_val = saved["date_str"]
+                    start_val = saved["start_time"]
+                    end_val = saved["end_time"]
+                    verified_val = 1
+                else:
+                    # Gia tri AI moi: KHONG tu danh da xac nhan (nguoi dung phai tich chon)
+                    date_val = s.get("date") or ""
+                    start_val = s.get("start_time") or ""
+                    end_val = s.get("end_time") or ""
+                    verified_val = 0
                 cur.execute("""
                     INSERT INTO intervention_sessions (
                         doc_id, session_order, box_number, date_str,
-                        start_time, end_time, raw_ocr, snippet_path, is_verified
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        start_time, end_time, raw_ocr, snippet_path, is_verified,
+                        ocr_confidence
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, (
                     doc_id,
                     idx,
-                    s.get("box_number"),
-                    s.get("date") or "",
-                    s.get("start_time") or "",
-                    s.get("end_time") or "",
+                    box,
+                    date_val,
+                    start_val,
+                    end_val,
                     s.get("raw_ocr") or "",
                     s.get("snippet_path") or "",
-                    1 if s.get("date") else 0
+                    verified_val,
+                    float(s.get("confidence") or 0.0)
                 ))
             conn.commit()
             return doc_id
@@ -124,6 +160,7 @@ class LocalOCRDatabase:
                 s.raw_ocr,
                 s.snippet_path,
                 s.is_verified,
+                s.ocr_confidence,
                 d.id AS doc_id,
                 d.file_path,
                 d.period,
@@ -146,11 +183,14 @@ class LocalOCRDatabase:
             rows = conn.execute(query, params).fetchall()
             return [dict(r) for r in rows]
 
-    def update_session(self, session_id: int, date_str: str, start_time: str, end_time: str):
+    def update_session(self, session_id: int, date_str: str, start_time: str, end_time: str,
+                       verified: Optional[bool] = None):
+        """Cap nhat Ngay/Gio do nguoi dung xac nhan/sua. verified=True/False bat/tat dau Da xac nhan."""
+        is_verified = (1 if verified else 0) if verified is not None else 1
         with self._get_conn() as conn:
             conn.execute("""
                 UPDATE intervention_sessions
-                SET date_str = ?, start_time = ?, end_time = ?, is_verified = 1
+                SET date_str = ?, start_time = ?, end_time = ?, is_verified = ?
                 WHERE id = ?
-            """, (date_str.strip(), start_time.strip(), end_time.strip(), session_id))
+            """, (date_str.strip(), start_time.strip(), end_time.strip(), is_verified, session_id))
             conn.commit()
