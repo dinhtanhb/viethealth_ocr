@@ -27,10 +27,10 @@ AI tự đọc **> 90%** ngày viết tay trên PDF chấm công can thiệp →
 
 1. **`is_verified = 1` nghĩa là con người đã xác nhận.** AI không bao giờ được tự set. Quét lại PDF **không được ghi đè** ngày người dùng đã duyệt (giữ theo `box_number`).
 2. **Có HAI kiểu phiếu.** `process_pdf()` tự branch: `v_lines >= 6` → Kiểu A (lưới 30 ô), ngược lại → Kiểu B (phiếu rời, duyệt mọi trang). Đừng giả định chỉ có lưới 30 ô.
-3. **Kiểu B phải giới hạn vùng đọc ở 35% chiều rộng bên trái**, nếu không chữ ký bị đọc nhầm thành ngày → sinh "buổi ảo".
+3. **Kiểu B: giới hạn vùng đọc đến đường kẻ dọc đầu tiên của bảng** (5–35% bề rộng khung), cắt dải theo **giao số** chứ không lọc theo tâm, và **bỏ trang nào không có kẻ dọc** trong khoảng đó (trang văn bản in). Thiếu ba bước này thì chữ ký/cột ghi chú bị đọc thành ngày → "buổi ảo".
 4. **Mọi PDF thật đều là scan thuần, không text layer.** Đường dẫn tiếng Việt phải lấy qua `os.walk` (không gõ tay — lệch Unicode NFC/NFD).
 5. **Message redirect phải dùng `urllib.parse.urlencode({...})`.** Ký tự `&` thô làm cắt cụt thông báo.
-6. **Ngưỡng tin cậy:** `CONFIDENCE_HIGH=0.60`, `CONFIDENCE_MED=0.40` (thang diem THAT cua PaddleOCR tren cum so; khong con `MIN_DATE_CONFIDENCE` cua EasyOCR). Phuong an `guessed` (tach cum so dinh / nho nham net chu so) bi ha duoi `CONFIDENCE_MED` va **khong bao gio duoc tu dong dien**. Do bang `bench_accuracy.py` voi ground truth do nguoi doc - khong do do phu. Ngưỡng 🟢 còn bị lặp trong `HTML_TEMPLATE` của `web_app.py` — sửa đồng bộ cả hai.
+6. **Ngưỡng tin cậy:** `CONFIDENCE_HIGH=0.60`, `CONFIDENCE_MED=0.40` (thang diem THAT cua PaddleOCR tren cum so; khong con `MIN_DATE_CONFIDENCE` cua EasyOCR). Phuong an `guessed` (tach cum so dinh / nho nham net chu so) bi ha xuong `CONFIDENCE_MED - 0.01` → UI bôi vàng dòng đó (`row-warn`) để bắt buộc người dùng soát; `confusable` không bao giờ được đứng slot 1 nên không bao giờ được tự điền. Do bang `bench_accuracy.py` voi ground truth do nguoi doc - khong do do phu. Ngưỡng 🟢 còn bị lặp trong `HTML_TEMPLATE` của `web_app.py` — sửa đồng bộ cả hai.
 
 ## Kiến trúc nhanh
 

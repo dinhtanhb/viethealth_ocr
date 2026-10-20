@@ -155,12 +155,19 @@ ngược lại → ghi giá trị AI với `is_verified=0`.
 * `bench_accuracy.py` — so kết quả AI với **ground truth do người đọc tay** (`benchmarks/ground_truth.json`), in tách bạch:
   * `EXACT` = % ô AI **tự điền đúng tuyệt đối** (đây mới là thước đo yêu cầu "AI tự đọc");
   * `TOP-N` = % ô có đáp án đúng **nằm trong gợi ý** (người dùng bấm chọn);
-  * `NGÀY` = đọc đúng riêng phần ngày; `NGUY HIỂM` = điền SAI mà điểm ≥ `CONFIDENCE_MED`.
+  * `NGÀY` = đọc đúng riêng phần ngày; `NGUY HIỂM` = điền SAI mà điểm ≥ `CONFIDENCE_MED`;
+  * `GIẢ` = ô AI tự điền ngày trong khi phiếu **không ghi ngày nào** (nguồn sai hại nhất, phải bằng 0).
 * ⚠️ Con số **`41/45 = 91.1%`** từng ghi ở đây là **độ phủ** do `bench_auto_read.py` (đã xóa) tính ra: nó đếm cả ô AI điền **sai**, nên thực tế 0 ngày đúng mà vẫn báo 91%. Không dùng lại kiểu đo đó.
-* Số liệu hiện tại, **trên 1 file** `Test_doc_PDF_2.pdf` (10 ô viết tay, kỳ `2026.10.20`, Kiểu A):
-  **EXACT 6/10 = 60%** | **TOP-N 10/10 = 100%** | NGÀY 9/10 | NGUY HIỂM 2 ô.
-  Chưa phải kết luận tổng thể — cần thêm ground truth cho nhiều file Kiểu A/Kiểu B khác.
-* Chi phí thật trên CPU: init engine ~18 s, **quét 1 file Kiểu A ~60–70 s** (`_debug_perf` 19/10/2026). Một kỳ ~500 file ⇒ nhiều giờ, phải quét nền/từng phần.
+* Số liệu đa file gần nhất (20/10/2026, 2 ground truth trong `benchmarks/ground_truth.json`):
+
+  | Mẫu | EXACT | TOP-N | NGÀY | NGUY HIỂM | GIẢ |
+  | :--- | :--- | :--- | :--- | :--- | :--- |
+  | Kiểu A `Test_doc_PDF_2.pdf` (ABP0055, kỳ `2026.10.20`, 10 ô) | 6/10 = 60% | 10/10 = 100% | 9/10 | 2 | 0 |
+  | Kiểu B `CBP0005` (kỳ `2024.09.15`, 10 buổi) | 5/10 = 50% | 7/10 = 70% | 6/10 | 0 | 0 |
+  | **Tổng** | **11/20 = 55%** | **17/20 = 85%** | 15/20 | 2 | **0** |
+
+  Kiểu B đã định vị đủ **10/10 ô**; ba ô còn sai thuộc **tầng nhận dạng nét** (`12/8`→`02/8`, `17/8`→`19/1`, `24/8`→`09/9`), không phải luật tách chuỗi. Vẫn **chưa đạt mốc >90% tự điền** — cần thêm ground truth cho nhiều file Kiểu A/Kiểu B khác.
+* Chi phí thật trên CPU: init engine ~18 s, **quét 1 file Kiểu A ~60–70 s**, Kiểu B nhiều trang ~200–270s/file (`CBP0005` 9 trang: 268 s). Một kỳ ~500 file ⇒ nhiều giờ, phải quét nền/từng phần.
 
 ---
 

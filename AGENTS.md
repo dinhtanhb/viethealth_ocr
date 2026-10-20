@@ -28,8 +28,13 @@ Tài liệu này ghi lại **các quy ước và cạm bẫy thực tế** đã 
 
 ### 3.2. Hai kiểu phiếu — đừng giả định chỉ có lưới 30 ô
 * `process_pdf()` là **dispatcher**: phân tích hình học trang cuối, `v_lines >= 6` → **Kiểu A** (lưới 30 ô), ngược lại → **Kiểu B** (phiếu rời từng buổi, nhiều trang).
-* Kiểu B: phải duyệt **tất cả các trang**, và **giới hạn vùng đọc ở 35% bề rộng bên trái** của khung bảng (không nhận dạng được khung thì giới hạn theo 32% bề rộng trang). Bỏ bước này sẽ đọc nhầm **chữ ký, số điện thoại, dòng "Mã số", cột "Nội dung"** thành ngày (đã đo trên CBP0005).
-* ⚠️ **Kiểu B hiện chưa đạt** (0/4 tự điền đúng, 2/4 đúng trong gợi ý — xem README mục 1.1). `process_pdf()` còn lỗi phân nhánh: `geo is None` rơi vào nhánh Kiểu A.
+* Kiểu B: phải duyệt **tất cả các trang**, và giới hạn vùng đọc đến **đường kẻ dọc đầu tiên của bảng** (`_session_column_divider`, tìm trong 5–35% bề rộng khung). Bỏ bước này sẽ đọc nhầm **chữ ký, số điện thoại, dòng "Mã số", cột "Nội dung"** thành ngày (đã đo trên CBP0005).
+* **Cắt dải theo giao số, không lọc theo tâm**: một dòng chứa cả ngày (trái) lẫn ghi chú (phải) có tâm nằm ngoài cột ngày nhưng phần bên trái vẫn là ngày thật. Lọc theo tâm từng làm mất 2 ngày của CBP0005 trang 4.
+* **Trang không có kẻ dọc trong 5–35% bề rộng là trang văn bản in** (MỤC TIÊU / TÓM TẮT / NHẬN ĐỊNH) → `continue` trước cả fallback. Trang MỤC TIÊU in sẵn "Từ ngày 1-6:", "Từ ngày 7-15:" từng bị đọc thành `10/07/2024` (ngày giả).
+* **Đã đo và loại bỏ** (đừng thử lại): nới lề trái cụm cắt (hằng số cố định hay lan tới khoảng trắng đều kéo nét kẻ bảng vào crop, `10/8` → `04/01`), tách một dải cao theo dòng chữ in (không đổi kết quả), phóng to ảnh OCR lên 640px (không đổi chỉ số, chậm hơn).
+* ⚠️ Kiểu B hiện đạt **EXACT 5/10, TOP-N 7/10** trên `CBP0005` (tìm đủ 10/10 ô, 0 ngày giả). Phần còn sai thuộc **nhận dạng nét** ('8' → '9'/'1'), không phải định vị.
+* Kiểu B có **hai dạng bút tích**: viết tay bằng mực xanh (`CBP0005`) và **chữ IN đen đánh máy** (`CBP0007` - chỉ ra 1 buổi vì bước tách mực xanh loại chữ in theo thiết kế). Dạng thứ hai cần đường đọc riêng chưa làm; bằng chứng `benchmarks/evidence/CBP0007_p06_dates_are_typed_print.jpg`.
+* `process_pdf()` vẫn còn điểm yếu: `geo is None` ở *trang cuối* rơi vào nhánh Kiểu A.
 * Mọi PDF trong dữ liệu thật đều là **ảnh scan thuần, không có text layer** — đừng thử đọc text layer.
 
 ### 3.3. Ngữ nghĩa `is_verified`
@@ -73,7 +78,7 @@ Tài liệu này ghi lại **các quy ước và cạm bẫy thực tế** đã 
 2. Với thay đổi OCR: chạy `bench_accuracy.py` trên **dữ liệu thật** và báo con số cụ thể (tử số/mẫu số, %), không suy đoán.
    ⚠️ Phải báo **EXACT trước, TOP-N sau**: EXACT mới là thước đo yêu cầu "AI tự đọc"; TOP-N (đúng trong gợi ý) **không được** dùng để tuyên bố đạt mốc >90% tự động.
    Chỉ số lấy từ 1 file duy nhất là **chưa đủ** để kết luận — phải đo trên nhiều file thật (cả Kiểu A lẫn Kiểu B).
-   Lần đo đa file gần nhất (20/10/2026): Kiểu A `Test_doc_PDF_2` 6/10 EXACT, `CBP2090` 3/12 ô có ngày; Kiểu B `CBP0005` 0/4 EXACT — **Kiểu B chưa đạt, không được gộp chung vào một con số**.
+   Lần đo đa file gần nhất (20/10/2026, `benchmarks/ground_truth.json`): Kiểu A `Test_doc_PDF_2` **EXACT 6/10, TOP-N 10/10**; Kiểu B `CBP0005` **EXACT 5/10, TOP-N 7/10**; tổng **11/20 = 55% EXACT**, **17/20 = 85% TOP-N**, 0 ngày giả. Vẫn **chưa đạt mốc >90% tự điền** — báo riêng từng kiểu, không gộp một con số.
 3. Với thay đổi UI/luồng: gọi HTTP thật vào `/scan/`, `/save-all/` và **kiểm tra lại DB bằng SQL**, hoặc render trình duyệt + ảnh chụp.
 4. Không rút gọn yêu cầu để cho "đỗ" dễ hơn — đặc biệt ngưỡng **> 90%** là yêu cầu cứng.
 

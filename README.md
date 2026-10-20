@@ -22,7 +22,7 @@ Toàn bộ chạy **cục bộ trên máy cá nhân**: không gửi ảnh, khôn
 Engine `PDFGridOCREngine.process_pdf()` phân tích hình học trang cuối để tự chọn luồng:
 
 * **Kiểu A — Bảng chấm công 30 ô** (lưới 5×6): thường gặp ở hồ sơ kỳ mới (VD `2026.10.20`). Cắt 30 ô, đọc band y **10%–37%** của mỗi ô (đo bằng row-projection mực xanh) — chữ viết tay nằm ở đó, chữ ký phụ huynh bắt đầu từ ~46% nên không bị lẫn.
-* **Kiểu B — Phiếu rời từng buổi** ("Buổi N ngày DD/MM/YYYY"): thường gặp ở hồ sơ kỳ cũ (VD `2024.09.15`). Quét **tất cả các trang**, định vị ngày viết tay ở cột trái ("THỜI GIAN"), giới hạn vùng đọc trong 35% bề rộng bảng (hoặc 32% bề rộng trang khi không nhận dạng được khung bảng) để loại trừ chữ ký.
+* **Kiểu B — Phiếu rời từng buổi** ("Buổi N ngày DD/MM/YYYY"): thường gặp ở hồ sơ kỳ cũ (VD `2024.09.15`). Quét **tất cả các trang**, định vị ngày viết tay ở cột trái ("THỜI GIAN"), giới hạn vùng đọc đến **chính đường kẻ dọc đầu tiên của bảng** (tìm trong khoảng 5%–35% bề rộng khung; đo trên `CBP0005` là x=575 = 16%). Trang nào không có kẻ dọc trong khoảng đó là **trang văn bản in** (MỤC TIÊU / TÓM TẮT / NHẬN ĐỊNH) → bỏ qua cả trang.
 
 ### 1.1. Trạng thái đo thực tế theo từng kiểu (20/10/2026)
 
@@ -30,15 +30,22 @@ Engine `PDFGridOCREngine.process_pdf()` phân tích hình học trang cuối đ�
 | :--- | :--- | :--- | :--- | :--- |
 | A — lưới 30 ô | `Test_doc_PDF_2.pdf` (ABP0055), 10 ô | **6/10 = 60%** | **10/10 = 100%** | Đã có ground truth trong `benchmarks/` |
 | A — lưới 30 ô | `CBP2090` (kỳ `2026.9.20`), 12 buổi | 3/12 ô có ngày | — | 1 trong 3 ngày lấy từ chữ in chân trang → đã chặn bằng luật "chữ in" |
-| B — phiếu rời | `CBP0005` (kỳ `2024.09.15`), ≥4 ngày thật | **0/4** | **2/4** (`10/8` đúng, `22/8` ra `02/8`) | 2 ngày ở trang 4 **không được phát hiện** |
+| B — phiếu rời | `CBP0005` (kỳ `2024.09.15`), 10 ngày thật | **5/10 = 50%** | **7/10 = 70%** | Tìm đủ **10/10 ô**, **0 ngày giả**, 0 ô điền sai ở điểm cao. Ảnh bằng chứng ngày do người đọc: `benchmarks/evidence/` |
 
-Nguyên nhân còn lại ở Kiểu B (chưa sửa):
+Tổng hợp hai ground truth hiện có (`bench_accuracy.py`, 20/10/2026): **EXACT 11/20 = 55%**, **TOP-N 17/20 = 85%**, GIẢ 0 ô.
 
-1. **Ngày nhỏ, sát nhau bị gom thành một cụm** — row-projection với khe 45px gộp "Buổi 1 / 5/8" và "Buổi 2 / 7/8" thành dải mực cao ~700px, gộp cả chữ in → cụm vượt `right_limit` hoặc không tách được ngày.
-2. **Nét gạch chéo viết tay bị đọc thành chữ số `1`** — `22/8/2024` → `21812029`; đã có luật nhận diện `(Ngày)1(Tháng)1` cho đa số trường hợp nhưng vẫn mất chữ số đầu khi nét viết liền.
-3. **Nhánh phân phối `geo is None` hiện rơi vào Kiểu A** — `process_pdf()` render *trang cuối* để đo hình học; trang không có khung bảng bị coi là lưới 30 ô.
+Bốn lỗi định vị đã sửa trong đợt đo Kiểu B này:
 
-Tốc độ đo được: ~60–90s/file sau khi chặn `MAX_OCR_SIDE=1100px` (trước đây 55s/**ô** với bản scan 12MB). Một kỳ 504 file ≈ 8–10 giờ chạy một lần trên CPU.
+1. **Lọc cụm theo tâm dải** → cắt theo **giao số** với cột ngày. Dải chứa cả "Ngày 5/8" lẫn cột ghi chú có tâm nằm ngoài ngưỡng từng bị bỏ nguyên dòng (mất 2 ngày ở trang 4 `CBP0005`).
+2. **Giới hạn cột bằng đường kẻ dọc thật** của bảng thay vì 35% bề rộng: loại được mã số "PN-101031" và cột ghi chú — hai nguồn ngày giả đã đo được.
+3. **Cổng cấp trang** (`_session_column_divider(...) is None` → bỏ trang): trang MỤC TIÊU in sẵn "Từ ngày 1-6:", "Từ ngày 7-15:" từng bị đọc thành `10/07/2024` (ngày giả).
+4. **Nét sổ dính vào đầu cụm**: `27/8/2024` → `12718121`. Chỉ bỏ đúng một ký tự `1` đầu cụm và chỉ thử sau khi mẫu chuẩn đã thất bại, nên không đổi cách đọc các cụm đang đúng.
+
+Ba lỗi còn lại của Kiểu B thuộc **tầng nhận dạng nét**, không phải định vị: `12/8` → `02/8` (mất chữ số 1 đầu), `17/8` → `19/1`, `24/8` → `09/9` (nét '8' bị đọc thành '9'/'1'). Đã đo và **đã revert** vì không tăng chỉ số: nới lề trái cụm cắt (kéo cả nét kẻ bảng vào, `10/8` → `04/01`), tách dải theo dòng chữ in, và phóng to ảnh OCR lên 640px.
+
+Kiểu B còn một **dạng phiếu chưa hỗ trợ**: `CBP0007` (cùng kỳ `2024.09.15`) chỉ trả về 1 buổi, vì ngày ở phiếu đó là **chữ IN đen đánh máy** (`Buổi 6 / Ngày / 18/8/2024`) — ảnh bằng chứng `benchmarks/evidence/CBP0007_p06_dates_are_typed_print.jpg`. Bước tách mực xanh loại chữ in theo đúng thiết kế, nên kiểu phiếu này cần một đường đọc riêng (OCR cả lớp chữ in), chưa làm.
+
+Tốc độ đo được: ~60–90s/file Kiểu A sau khi chặn `MAX_OCR_SIDE=1100px` (trước đây 55s/**ô** với bản scan 12MB); Kiểu B nhiều trang ~200–270s/file (`CBP0005` 9 trang: 268s). Một kỳ 504 file ≈ 8–12 giờ chạy một lần trên CPU.
 
 ---
 
@@ -140,7 +147,9 @@ viethealth_ocr/
 │   ├── local_db.py             # SQLite: documents + sessions, migration, bảo toàn dữ liệu đã xác nhận
 │   └── excel_exporter.py       # Xuất báo cáo .xlsx
 ├── docs/                       # Tài liệu thiết kế & kế hoạch
-├── benchmarks/ground_truth.json # Ngày do NGƯỜI đọc tay - thước đo cho bench_accuracy
+├── benchmarks/
+│   ├── ground_truth.json     # Ngày do NGƯỜI đọc tay - thước đo cho bench_accuracy
+│   └── evidence/             # Ảnh cắt bằng chứng cho từng dòng ground truth Kiểu B
 ├── bench_accuracy.py           # Đo ĐỘ CHÍNH XÁC (EXACT / TOP-N) so với ground truth
 ├── test_step1_ocr.py           # Smoke test 1 file PDF
 ├── setup_offline_models.py     # Tải & đóng gói model PaddleOCR
