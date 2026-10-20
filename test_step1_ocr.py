@@ -65,29 +65,41 @@ def run_test(sample_pdf: str):
 
     total_hw = len(sessions)
     total_date = sum(1 for s in sessions if s["date"])
+    total_multi = sum(1 for s in sessions
+                      if len([c for c in (s.get("candidates") or [])
+                              if c.get("basis") != "confusable"]) > 1)
     pct = round(total_date * 100.0 / total_hw) if total_hw else 0
-    print(f"\n✅ Tìm thấy {total_hw} buổi có chữ viết tay | 🤖 AI tự đọc được {total_date}/{total_hw} Ngày ({pct}%)")
+    print(f"\n✅ Tìm thấy {total_hw} buổi có chữ viết tay | "
+          f"🤖 AI điền Ngày vào {total_date}/{total_hw} ô ({pct}% ĐỘ PHỦ - chưa phải độ CHÍNH XÁC; "
+          f"muốn biết đọc đúng hay sai phải chạy bench_accuracy.py với ground truth)")
+    if total_multi:
+        print(f"   🟡 {total_multi} ô AI đọc ra nhiều phương án - xem cột 'Gợi ý' để biết ô nào cần người bấm chọn")
     print("-" * 95)
-    print(f"{'Buổi':<6} | {'Ô số':<6} | {'Ngày CT':<11} | {'Giờ BĐ':<7} | {'Giờ KT':<7} | {'Chuỗi thô AI đọc (Raw OCR)':<24} | {'Trạng thái'}")
-    print("-" * 95)
+    print(f"{'Buổi':<6} | {'Ô số':<6} | {'Ngày CT':<11} | {'Giờ BĐ':<7} | {'Giờ KT':<7} | {'Gợi ý':<7} | {'Chuỗi thô AI đọc (Raw OCR)':<24} | {'Trạng thái'}")
+    print("-" * 110)
     for idx, s in enumerate(sessions, start=1):
         d_str = s['date'] or "??/??/????"
         st_str = s['start_time'] or "--:--"
         et_str = s['end_time'] or "--:--"
         raw_str = (s['raw_ocr'][:22] + "..") if len(s['raw_ocr']) > 24 else s['raw_ocr']
         conf = s.get('confidence', 0.0)
+        cands = s.get('candidates') or []
+        cand_str = " | ".join(c["date"][:5] for c in cands[1:3]) or "-"
+        # Chi phuong an dua tren bang chung anh (khong tinh nham net) moi lam can 🟢/🟡
+        evidence = [c for c in cands if c.get("basis") != "confusable"]
+        is_guessed = bool(evidence) and evidence[0].get("guessed")
 
-        if s['date'] and conf >= ocr_engine.CONFIDENCE_HIGH:
+        if s['date'] and conf >= ocr_engine.CONFIDENCE_HIGH and len(evidence) <= 1 and not is_guessed:
             status = f"🟢 Tự điền (tin cậy {conf:.2f})"
         elif s['date']:
-            status = f"🟡 Điền chưa chắc (tin cậy {conf:.2f}) - cần soát"
+            status = f"🟡 Điền xong nhưng cần soát (tin cậy {conf:.2f})"
         else:
             status = "🔴 Chưa đọc được - nhập tay"
 
-        print(f"{idx:<6} | Ô #{s['box_number']:<3} | {d_str:<11} | {st_str:<7} | {et_str:<7} | {raw_str:<24} | {status}")
-    print("-" * 95)
-    if total_hw and pct < 90:
-        print(f"⚠️ Tỷ lệ {pct}% DƯỚI mốc 90% — cần rà soát lại engine cho kiểu phiếu này.")
+        print(f"{idx:<6} | Ô #{s['box_number']:<3} | {d_str:<11} | {st_str:<7} | {et_str:<7} | {cand_str:<7} | {raw_str:<24} | {status}")
+    print("-" * 110)
+    if total_hw and total_date < total_hw:
+        print(f"⚠️ AI còn bỏ {total_hw - total_date} ô chưa điền được - đối chiếu ảnh cắt từng ô.")
     print("📁 Ảnh cắt chữ viết tay đã lưu tại: 'media_snippets/'")
 
 
