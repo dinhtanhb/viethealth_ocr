@@ -272,7 +272,12 @@ class PDFGridOCREngine:
         return dets
 
     def _cap_ocr_side(self, img: np.ndarray) -> np.ndarray:
-        """Thu nho anh qua lon ve MAX_OCR_SIDE (giu ty le) de buoc detect chay nhanh."""
+        """Thu nho anh qua lon ve MAX_OCR_SIDE (giu ty le) de buoc detect chay nhanh.
+
+        KHONG phong to anh be: do tren CBP0005 (phong toi MIN 640px), ket qua
+        EXACT/TOP-N khong doi, chi lam '91913024' bi mat mot chu so thanh
+        '9191304' va cham hon o moi o OCR.
+        """
         h, w = img.shape[:2]
         longest = max(h, w)
         if longest <= self.MAX_OCR_SIDE:
@@ -435,8 +440,14 @@ class PDFGridOCREngine:
         if not found:
             # Người viết dùng dấu '/', nhưng PaddleOCR đọc nét gạch chéo thành chữ số '1':
             # '10/8/2024' -> '10181229'. Nhận diện dạng (Ngày)1(Tháng)1 trước khi tách thô.
+            sep1 = re.compile(r"^(\d{1,2})1(\d{1,2})1\d{2,4}$")
             for g in seq:
-                ms = re.match(r"^(\d{1,2})1(\d{1,2})1\d{2,4}$", g)
+                ms = sep1.match(g)
+                if not ms and len(g) > 5 and g[0] == "1":
+                    # Nét sổ của '27/8' bị đọc thành '1' DÍNH vào đầu cụm: '12718121'.
+                    # Chỉ thử sau khi mẫu chuẩn đã thất bại và chỉ bỏ đúng 1 ký tự,
+                    # để không đổi cách đọc những cụm đang đọc đúng (đo trên CBP0005 p09).
+                    ms = sep1.match(g[1:])
                 if ms:
                     add(ms.group(1), ms.group(2), "split", 0.65)
             for g in seq:
@@ -465,9 +476,16 @@ class PDFGridOCREngine:
             ):
                 add(d_s, m_s, "confusable", 0.35)
 
-        ranked = sorted(
+        by_strength = sorted(
             found.values(), key=lambda c: (self._BASIS_RANK.get(c["basis"], 9), -c["score"])
-        )[:3]
+        )
+        # Slot 2-3 uu tien bien the NHAM NET cua phuong an dan dau: do tren CBP0005,
+        # loi that 100% la 'doc sai 1 chu so' ('20/8' -> '20/9', '22/8' -> '2/8'),
+        # nen gia thiet sua 1 chu so gia tri hon mot cach tach so ngau nhien.
+        ranked = by_strength[:1]
+        alts = [c for c in by_strength[1:] if c["basis"] == "confusable"][:2]
+        ranked += alts
+        ranked += [c for c in by_strength[1:] if all(c is not a for a in alts)][: 3 - len(ranked)]
         # Cả 2 số của phương án chỉ đến từ đoạn OCR lẫn nhiều chữ IN -> đây là chữ in
         # (chân trang, đầu dòng), không phải nét viết tay: vẫn giữ làm gợi ý
         # nhưng tuyệt đối không tự điền vào ô.
@@ -674,6 +692,9 @@ class PDFGridOCREngine:
                 continue
             rx1 = max(0, int(xs.min()) - 20)
             rx2 = min(w_page, int(xs.max()) + 20)
+            # KHONG nới thêm lề trái: do tren CBP0005, moi cach nới (hang so co dinh
+            # 45-80px hay lan den khoang trang 60px) deu keo net ke bang vao vung cat
+            # va lam giam EXACT ('10/8' -> '04/01', '20/8' -> '02/01').
             if rx2 - rx1 < 60:
                 continue
             boxed.append((ry1, ry2, rx1, rx2))
@@ -692,6 +713,26 @@ class PDFGridOCREngine:
             if not (is_vline or is_hline):
                 keep[y:y + h, x:x + w] = mask[y:y + h, x:x + w]
         return keep
+
+    @staticmethod
+    def _session_column_divider(geo: Optional[Dict], from_offset: float = 0.05,
+                                to_offset: float = 0.35) -> Optional[int]:
+        """
+        Đường kẻ dọc đầu tiên của bảng = ranh giới cột 'Thời gian' trên phiếu Kiểu B
+        (đo trên CBP0005: x=575, tức 16% bề rộng bảng). Cắt sát tại đây loại được
+        mã số 'PN-101031' và cột ghi chú - hai nguồn ngày giả đã đo được - mà vẫn
+        giữ nguyên nét viết trong cột ngày.
+        Trả None khi trang không có kẻ nào trong 5-35% bề rộng: đó là trang văn bản
+        (MỤC TIÊU, TÓM TẮT, NHẬN ĐỊNH) chứ không phải phiếu buổi.
+        """
+        if not geo:
+            return None
+        gx, gy, gw, gh = geo["rect"]
+        for x in geo.get("v_lines", []):
+            off = (x - gx) / float(gw) if gw else 0.0
+            if from_offset <= off <= to_offset:
+                return int(x)
+        return None
 
     @staticmethod
     def _is_digit_dominant(raw_text: str, min_ratio: float = 0.6) -> bool:
@@ -730,23 +771,28 @@ class PDFGridOCREngine:
                     cv2.COLOR_RGB2BGR
                 )
 
-                # Ngày viết tay chỉ xuất hiện ở cột 'Thời gian' (left ~35% bảng);
-                # chữ ký Phụ huynh ở cột giữa/dưới bị loại hoàn toàn khỏi danh sách cụm.
-                # Trang không nhận dạng được khung bảng (geo=None) vẫn phải clip theo
-                # tỷ lệ TRANG, nếu không sẽ OCR cả dòng 'Mã số', số điện thoại, cột
-                # 'Nội dung' rồi bịa ra ngày từ mấy cụm số đó (đo trên CBP0005).
+                # Ngày viết tay chỉ nằm trong cột 'Thời gian' - giới hạn bằng chính
+                # đường kẻ dọc đầu tiên của bảng. Cột giữa/dưới (chữ ký, ghi chú) bị
+                # loại khỏi mọi cụm đưa vào OCR.
                 geo = self.analyze_page_geometry(img)
+                divider = self._session_column_divider(geo)
+                if divider is None:
+                    # Trang không có kẻ dọc phân cách cột 'Thời gian' -> không phải
+                    # phiếu buổi: bỏ qua. Đo trên CBP0005, trang MỤC TIÊU in sẵn
+                    # 'Từ ngày 1-6:', 'Từ ngày 7-15:' bị đọc thành 10/07/2024 (ngày giả).
+                    continue
                 runs = self._blue_ink_row_runs(img)
-                if geo:
-                    gx, gy, gw, gh = geo["rect"]
-                    right_limit = gx + int(gw * 0.35)
-                else:
-                    right_limit = int(img.shape[1] * 0.32)
+                right_limit = divider
                 clipped = []
                 for (ry1, ry2, rx1, rx2) in runs:
-                    if (rx1 + rx2) / 2.0 > right_limit:
+                    # Cắt theo GIAO SỐ với cột ngày, KHÔNG lọc theo tâm cụm: một dòng
+                    # chứa cả 'Ngày 5/8' (trái) lẫn ghi chú (phải) có tâm nằm ngoài
+                    # ngưỡng, nhưng phần bên trái vẫn là ngày thật (mất 2 ngày của
+                    # CBP0005 trang 4 đúng vì cách lọc tâm này).
+                    x2 = min(rx2, right_limit)
+                    if rx1 >= right_limit or x2 - rx1 < 60:
                         continue
-                    clipped.append((ry1, ry2, rx1, min(rx2, right_limit)))
+                    clipped.append((ry1, ry2, rx1, x2))
                 runs = clipped
 
                 page_results = []
