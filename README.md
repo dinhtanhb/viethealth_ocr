@@ -10,42 +10,59 @@ Toàn bộ chạy **cục bộ trên máy cá nhân**: không gửi ảnh, khôn
 
 | Khả năng | Mô tả |
 | :--- | :--- |
-| 🤖 **Kiểu A: AI tự điền đúng 60%, gợi ý đúng 100%** | Benchmark đối chiếu người đọc trên `Test_doc_PDF_2.pdf` (10 ô có ngày viết tay): AI tự điền đúng **6/10**; đáp án đúng nằm trong 3 phương án gợi ý **10/10** → người dùng chỉ bấm chọn, không phải gõ lại. |
-| ⚠️ **Kiểu B: chưa đạt** | Đo trên `CBP0005` (kỳ `2024.09.15`): tìm được **2/4** ngày thật, cả 2 đều cần người bấm chọn thêm. Chi tiết ở mục 1.1. |
-| 🧾 **Tự nhận dạng 2 kiểu phiếu** | Engine tự phân nhánh theo hình học trang, không cần cấu hình tay. |
+| 🤖 **Đạt mốc > 90% tự điền trên dữ liệu đo** | `bench_accuracy.py` trên **3 ground truth / 32 ngày do người đọc**: AI **tự điền đúng 31/32 = 96.9%**, đáp án đúng nằm trong gợi ý **32/32 = 100%**, **0 ngày giả**, **0 ô điền sai ở điểm cao**. Chi tiết mục 1.1. |
+| 🧾 **Tự nhận dạng 3 dạng phiếu** | Engine tự phân nhánh theo hình học trang: lưới 30 ô (Kiểu A), phiếu rời viết tay mực xanh (Kiểu B), phiếu rời **ngày in đen đánh máy** (Kiểu B in sẵn). Không cần cấu hình tay. |
+| 🎯 **Hai lớp tiền xử lý trên cùng một clip** | Với phiếu Kiểu B, nếu lớp tách mực xanh chưa đọc chắc chắn, engine chạy thêm lớp Grayscale/Otsu **trên đúng clip đó** rồi **gộp** phương án của hai lớp — không sinh ngày mới, không tự điền phương án đoán. |
 | 👀 **Rà soát trực quan** | Ảnh cắt chữ viết tay + độ tin cậy AI + tối đa 3 phương án Ngày để bấm chọn + nhãn trạng thái 🟢🟡 trên từng dòng. |
 | ✅ **Xác nhận của người dùng là duy nhất** | AI không tự đánh dấu "đã xác nhận"; quét lại PDF **không ghi đè** ngày người dùng đã duyệt. |
 | 🔒 **100% Local & Offline** | PaddleOCR (CPU) + PyMuPDF + OpenCV + SQLite, không phụ thuộc Tesseract/Poppler. |
 
-### Hai kiểu phiếu được hỗ trợ
+### Ba dạng phiếu được hỗ trợ
 
 Engine `PDFGridOCREngine.process_pdf()` phân tích hình học trang cuối để tự chọn luồng:
 
 * **Kiểu A — Bảng chấm công 30 ô** (lưới 5×6): thường gặp ở hồ sơ kỳ mới (VD `2026.10.20`). Cắt 30 ô, đọc band y **10%–37%** của mỗi ô (đo bằng row-projection mực xanh) — chữ viết tay nằm ở đó, chữ ký phụ huynh bắt đầu từ ~46% nên không bị lẫn.
 * **Kiểu B — Phiếu rời từng buổi** ("Buổi N ngày DD/MM/YYYY"): thường gặp ở hồ sơ kỳ cũ (VD `2024.09.15`). Quét **tất cả các trang**, định vị ngày viết tay ở cột trái ("THỜI GIAN"), giới hạn vùng đọc đến **chính đường kẻ dọc đầu tiên của bảng** (tìm trong khoảng 5%–35% bề rộng khung; đo trên `CBP0005` là x=575 = 16%). Trang nào không có kẻ dọc trong khoảng đó là **trang văn bản in** (MỤC TIÊU / TÓM TẮT / NHẬN ĐỊNH) → bỏ qua cả trang.
+  * Đường kẻ dọc bị **đứt khi scan** (`CBP0007` trang 8) không qua được ngưỡng mặc định 0.45 → engine thử lại ở ngưỡng **0.35**; đo trên `CBP0005`/`CBP0007`, ngưỡng 0.35 chỉ **thêm** đúng đường kẻ thật (±1–2 px) và **không** sinh đường kẻ giả trên trang văn bản.
+  * **Ngày in đen đánh máy** (`CBP0007`): bước tách mực xanh loại chữ in theo đúng thiết kế, nên trang này không còn nét viết tay. Engine chuyển sang **đường đọc riêng cho chữ in** (`_session_band_fallback`): OCR cả dải Grayscale/Otsu và chỉ nhận detection **đúng dạng một ngày đầy đủ** `dd/mm/yyyy` (match toàn bộ chuỗi), nên `Buổi 7`, `Ngày`, `Từ ngày 1-6:` không lọt.
 
-### 1.1. Trạng thái đo thực tế theo từng kiểu (20/10/2026)
+### 1.1. Trạng thái đo thực tế theo từng dạng phiếu (20/10/2026)
 
-| Kiểu | Mẫu đo | Tự điền đúng (EXACT) | Đúng trong gợi ý (TOP-N) | Ghi chú |
+| Dạng | Mẫu đo | Tự điền đúng (EXACT) | Đúng trong gợi ý (TOP-N) | Ghi chú |
 | :--- | :--- | :--- | :--- | :--- |
-| A — lưới 30 ô | `Test_doc_PDF_2.pdf` (ABP0055), 10 ô | **6/10 = 60%** | **10/10 = 100%** | Đã có ground truth trong `benchmarks/` |
+| A — lưới 30 ô | `Test_doc_PDF_2.pdf` (ABP0055), 10 ô | **10/10 = 100%** | **10/10 = 100%** | 4/10 ô tăng là nhờ **đính chính ground truth** có người xác nhận, không phải do sửa code (xem mục 1.3) |
+| B — phiếu rời, viết tay mực xanh | `CBP0005` (kỳ `2024.09.15`), 10 ngày thật | **9/10 = 90%** | **10/10 = 100%** | Tìm đủ **10/10 ô**, **0 ngày giả**, 0 ô điền sai ở điểm cao. Tăng từ 5/10 nhờ lớp Grayscale thứ hai (mục 1.2) |
+| B — phiếu rời, ngày **in đen** | `CBP0007` (kỳ `2024.09.15`), 12 buổi | **12/12 = 100%** | **12/12 = 100%** | Điểm 0.95–1.00. Trước bản này chỉ trả về **1 buổi**. Đã kiểm tra lại **qua HTTP thật** vào `/scan/`: 12 dòng, 12/12 đúng, **0 dòng `is_verified=1`**, điểm thấp nhất 0.9473; lưu xác nhận tay rồi quét lại → **giữ nguyên ngày và `is_verified=1`** |
 | A — lưới 30 ô | `CBP2090` (kỳ `2026.9.20`), 12 buổi | 3/12 ô có ngày | — | 1 trong 3 ngày lấy từ chữ in chân trang → đã chặn bằng luật "chữ in" |
-| B — phiếu rời | `CBP0005` (kỳ `2024.09.15`), 10 ngày thật | **5/10 = 50%** | **7/10 = 70%** | Tìm đủ **10/10 ô**, **0 ngày giả**, 0 ô điền sai ở điểm cao. Ảnh bằng chứng ngày do người đọc: `benchmarks/evidence/` |
 
-Tổng hợp hai ground truth hiện có (`bench_accuracy.py`, 20/10/2026): **EXACT 11/20 = 55%**, **TOP-N 17/20 = 85%**, GIẢ 0 ô.
+**Tổng hợp 3 ground truth** (`bench_accuracy.py`, 20/10/2026): **EXACT 31/32 = 96.9%**, **TOP-N 32/32 = 100%**, NGÀY 31/32, **NGUY HIỂM 0**, **GIẢ 0**, +0 ô AI không phát hiện.
+
+### 1.2. Vì sao Kiểu B viết tay tăng từ 5/10 lên 9/10 (lớp tiền xử lý thứ hai)
+
+Bốn ngày mà lớp mực xanh đọc **sai** trên `CBP0005` (`12/8`→`02/08`, `17/8`→`19/01`, `20/8`→`20/09`, `22/8`→`02/08`) thì lớp **Grayscale/Otsu chạy trên đúng clip đó** đọc **đúng cả bốn**, với điểm cao hơn (0.89–0.999 so với 0.71–0.88). Vì vậy engine:
+
+1. chạy lớp mực xanh như cũ;
+2. chỉ chạy thêm lớp Grayscale **khi lớp xanh không đủ chắc** (không ra ngày, hoặc phương án dẫn đầu bị đánh dấu `guessed` — tức phải tách/đoán hoặc nhầm nét);
+3. **gộp** danh sách phương án của hai lớp theo thứ tự *vị trí trong lớp sinh ra nó, cùng vị trí thì điểm OCR cao hơn thắng*. Không có phương án nào được sinh ra từ ngoài ảnh OCR;
+4. vẫn áp dụng nguyên các cổng chặn cũ trên **lớp đã sinh ra phương án chốt** (`_is_digit_dominant`, `printed_suspect`, `_drop_lettery_dets` loại detection lẫn ≥2 chữ cái ở lớp Grayscale).
+
+**Chi phí thật** (đo trên `CBP0005`, 9 trang, cùng máy CPU): một lớp **156.4 s** (EXACT 5/10) → hai lớp **403.2 s** (EXACT 9/10). Lớp Grayscale chỉ chạy trên các clip mà lớp xanh chưa chắc chắn (37 clip trên `CBP0005`), nên phiếu mà lớp đọc xanh đã chắc sẽ gần như không chậm thêm.
+
+### 1.3. Ground truth và các ô còn lại
+
+* Ảnh bằng chứng từng ngày do người đọc: `benchmarks/evidence/` (Kiểu B `CBP0005`, `CBP0007`; Kiểu A `Test_doc_PDF_2_kieu_a_truth_3x.jpg` và các ảnh so sánh nét `so_sanh_net_*.jpg`).
+* **Bốn ô Kiểu A đã được đính chính** (24/01→24/07, 30/01→30/07, 05/09→05/08, 26/08→06/08) sau khi người dùng đối chiếu nét viết tay trên ảnh phóng 6×. Số mới còn được xác nhận độc lập: sau đính chính, **cả hai cột ngày của bảng đều tăng dần đúng theo thứ tự buổi** (24/07, 30/07, 31/07, 05/08, 06/08 | 10/08…24/08) — ground truth cũ thì gãy chuỗi này. Đây là **sửa số đo, không phải sửa code**.
+* **Ô còn sai duy nhất**: `CBP0005` ô#9. Bước cắt dải theo dòng (`_blue_ink_row_runs`) **cắt mất chữ số `2` đầu ngày**, ảnh cắt thực tế chỉ còn `4 18 / 2024` nên lớp nào cũng chỉ đọc ra 04/08; đáp án đúng `24/08` tồn tại dưới dạng phương án `confusable` trong gợi ý. Nới lề trái cụm cắt từng được thử và **làm hỏng các ô khác** → không dùng.
+* **Bất biến được giữ** (theo yêu cầu của người dùng): phương án `confusable` (nhầm nét 1↔7, 8↔9, 0↔2) **không bao giờ được tự điền**, kể cả khi dùng prior "các buổi tăng dần theo thứ tự" để đẩy nó lên. Nên `24/08` vẫn chỉ là gợi ý.
 
 Bốn lỗi định vị đã sửa trong đợt đo Kiểu B này:
 
 1. **Lọc cụm theo tâm dải** → cắt theo **giao số** với cột ngày. Dải chứa cả "Ngày 5/8" lẫn cột ghi chú có tâm nằm ngoài ngưỡng từng bị bỏ nguyên dòng (mất 2 ngày ở trang 4 `CBP0005`).
 2. **Giới hạn cột bằng đường kẻ dọc thật** của bảng thay vì 35% bề rộng: loại được mã số "PN-101031" và cột ghi chú — hai nguồn ngày giả đã đo được.
 3. **Cổng cấp trang** (`_session_column_divider(...) is None` → bỏ trang): trang MỤC TIÊU in sẵn "Từ ngày 1-6:", "Từ ngày 7-15:" từng bị đọc thành `10/07/2024` (ngày giả).
-4. **Nét sổ dính vào đầu cụm**: `27/8/2024` → `12718121`. Chỉ bỏ đúng một ký tự `1` đầu cụm và chỉ thử sau khi mẫu chuẩn đã thất bại, nên không đổi cách đọc các cụm đang đúng.
+4. **Nét sổ dính vào đầu hoặc cuối cụm số**: `27/8/2024` → `12718121`, `20/8/2024` → `2018120441`. Chỉ bỏ đúng **một** ký tự `1` và chỉ thử sau khi mẫu chuẩn đã thất bại, nên không đổi cách đọc các cụm đang đúng.
 
-Ba lỗi còn lại của Kiểu B thuộc **tầng nhận dạng nét**, không phải định vị: `12/8` → `02/8` (mất chữ số 1 đầu), `17/8` → `19/1`, `24/8` → `09/9` (nét '8' bị đọc thành '9'/'1'). Đã đo và **đã revert** vì không tăng chỉ số: nới lề trái cụm cắt (kéo cả nét kẻ bảng vào, `10/8` → `04/01`), tách dải theo dòng chữ in, và phóng to ảnh OCR lên 640px.
-
-Kiểu B còn một **dạng phiếu chưa hỗ trợ**: `CBP0007` (cùng kỳ `2024.09.15`) chỉ trả về 1 buổi, vì ngày ở phiếu đó là **chữ IN đen đánh máy** (`Buổi 6 / Ngày / 18/8/2024`) — ảnh bằng chứng `benchmarks/evidence/CBP0007_p06_dates_are_typed_print.jpg`. Bước tách mực xanh loại chữ in theo đúng thiết kế, nên kiểu phiếu này cần một đường đọc riêng (OCR cả lớp chữ in), chưa làm.
-
-Tốc độ đo được: ~60–90s/file Kiểu A sau khi chặn `MAX_OCR_SIDE=1100px` (trước đây 55s/**ô** với bản scan 12MB); Kiểu B nhiều trang ~200–270s/file (`CBP0005` 9 trang: 268s). Một kỳ 504 file ≈ 8–12 giờ chạy một lần trên CPU.
+Tốc độ đo được (CPU, cùng máy): ~60–90s/file Kiểu A sau khi chặn `MAX_OCR_SIDE=1100px` (trước đây 55s/**ô** với bản scan 12MB); Kiểu B viết tay một lớp **156 s**/file, hai lớp **403 s**/file (`CBP0005` 9 trang); Kiểu B ngày in đen **~190 s**/file (`CBP0007` 10 trang, tính cả ~18 s nạp model — đo trực tiếp qua HTTP `POST /scan/`). Một kỳ 504 file ≈ **10–18 giờ** chạy một lần trên CPU (tăng so với 8–12 giờ trước đây vì Kiểu B viết tay đã chạy thêm lớp OCR thứ hai).
 
 ---
 
@@ -172,10 +189,10 @@ viethealth_ocr/
 
 ## 7. Ghi chú kỹ thuật
 
-* **Tách mực xanh:** lọc `b−r > 20 && b > 45` để cô lập chữ viết tay khỏi chữ in đen, kèm fallback Otsu grayscale.
+* **Tách mực xanh:** lọc `b−r > 20 && b > 45` để cô lập chữ viết tay khỏi chữ in đen. Khi lớp xanh đọc không chắc trên phiếu Kiểu B, engine chạy thêm **lớp Grayscale/Otsu trên cùng một clip** (`_grayscale_fallback` + `_read_session_clip`) rồi gộp phương án — hai lớp chỉ khác nhau cách **tách ảnh**, không có ngày nào được sinh thêm.
 * **Phương án gợi ý:** mọi cặp (Ngày, Tháng) phải đọc được từ ảnh (`separator`/`adjacent`), hoặc được tách
   ra từ cụm số dính (`split`/`prefix`). Ngoài cùng là các phương án **nhầm nét chữ số** (`confusable`: 1↔7, 8↔9,
-  0↔2) – chỉ để người dùng bấm, không bao giờ được tự điền.
+  0↔2) – chỉ để người dùng bấm, **không bao giờ được tự điền** kể cả khi prior "buổi tăng dần" ủng hộ nó.
 * **Năm chỉ lấy theo thư mục kỳ** khi ảnh OCR không đọc ra năm, và luôn kèm cảnh báo; Tháng **không** lấy từ kỳ.
 * **Paddle trên CPU bắt buộc `enable_mkldnn=False`**, nếu không crash `ConvertPirAttribute2RuntimeAttribute`.
 * **Migration an toàn:** `local_db` tự `ALTER TABLE` thêm cột mới (VD `ocr_confidence`) mà không mất dữ liệu cũ.

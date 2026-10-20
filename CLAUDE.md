@@ -8,7 +8,9 @@ Hướng dẫn cho Claude khi làm việc trong repo **viethealth_ocr**.
 
 ## Mục tiêu sản phẩm (bất biến)
 
-AI tự đọc **> 90%** ngày viết tay trên PDF chấm công can thiệp → **tự điền** vào bảng rà soát → người dùng **xác nhận / sửa** → **lưu** → xuất Excel. Chạy **100% offline**, dữ liệu không rời máy người dùng.
+AI tự đọc **> 90%** ngày ghi trên PDF chấm công can thiệp (viết tay **hoặc** in đen) → **tự điền** vào bảng rà soát → người dùng **xác nhận / sửa** → **lưu** → xuất Excel. Chạy **100% offline**, dữ liệu không rời máy người dùng.
+
+* Trạng thái đo gần nhất (20/10/2026, 3 ground truth / 32 ngày do người đọc): **EXACT 31/32 = 96.9%**, TOP-N 32/32 = 100%, GIẢ 0, NGUY HIỂM 0. Chỉ là **3 file** — chưa phải kết luận trên toàn bộ hồ sơ. Xem bảng phân bổ "tăng nhờ code / nhờ đính chính ground truth" trong `AGENTS.md` mục 6.
 
 ## Lệnh hay dùng (Windows / PowerShell)
 
@@ -26,7 +28,7 @@ AI tự đọc **> 90%** ngày viết tay trên PDF chấm công can thiệp →
 ## 6 điều không được làm sai
 
 1. **`is_verified = 1` nghĩa là con người đã xác nhận.** AI không bao giờ được tự set. Quét lại PDF **không được ghi đè** ngày người dùng đã duyệt (giữ theo `box_number`).
-2. **Có HAI kiểu phiếu.** `process_pdf()` tự branch: `v_lines >= 6` → Kiểu A (lưới 30 ô), ngược lại → Kiểu B (phiếu rời, duyệt mọi trang). Đừng giả định chỉ có lưới 30 ô.
+2. **Có HAI bố cục phiếu, và Kiểu B có HAI dạng bút tích.** `process_pdf()` tự branch: `v_lines >= 6` → Kiểu A (lưới 30 ô), ngược lại → Kiểu B (phiếu rời, duyệt mọi trang). Trong Kiểu B: ngày **viết tay mực xanh** (`CBP0005`) đọc bằng ensemble hai lớp trên cùng clip (`_read_session_clip`), ngày **in đen đánh máy** (`CBP0007`) đọc bằng đường riêng (`_session_band_fallback`, chỉ nhận detection nguyên vẹn `dd/mm/yyyy`). Đừng giả định chỉ có lưới 30 ô, cũng đừng giả định Kiểu B toàn là chữ viết tay.
 3. **Kiểu B: giới hạn vùng đọc đến đường kẻ dọc đầu tiên của bảng** (5–35% bề rộng khung), cắt dải theo **giao số** chứ không lọc theo tâm, và **bỏ trang nào không có kẻ dọc** trong khoảng đó (trang văn bản in). Thiếu ba bước này thì chữ ký/cột ghi chú bị đọc thành ngày → "buổi ảo".
 4. **Mọi PDF thật đều là scan thuần, không text layer.** Đường dẫn tiếng Việt phải lấy qua `os.walk` (không gõ tay — lệch Unicode NFC/NFD).
 5. **Message redirect phải dùng `urllib.parse.urlencode({...})`.** Ký tự `&` thô làm cắt cụt thông báo.
@@ -49,6 +51,7 @@ AI tự đọc **> 90%** ngày viết tay trên PDF chấm công can thiệp →
 Không báo hoàn thành nếu thiếu bằng chứng thật:
 
 * OCR thay đổi → chạy `bench_accuracy.py` trên **dữ liệu thật**, báo số cụ thể (tử số/mẫu số, %). Ưu tiên **EXACT** (tự điền đúng); TOP-N (đúng trong gợi ý) là chỉ số phụ, không được thay EXACT để báo "đạt > 90%".
+* Sửa `benchmarks/ground_truth.json` thì **phải báo rõ** ô nào tăng nhờ sửa số đo, ô nào tăng nhờ code, và phải có người xác nhận nét viết trên ảnh bằng chứng. Không im lặng sửa GT cho chỉ số đẹp.
 * UI/luồng thay đổi → gọi HTTP thật vào `/scan/` + `/save-all/` và **verify lại bằng SQL**, hoặc render trình duyệt kèm ảnh chụp.
 * `py_compile` sạch lỗi.
 * **Không rút gọn yêu cầu** để vượt mốc 90% dễ hơn — đó là yêu cầu cứng của đề bài.

@@ -448,6 +448,10 @@ class PDFGridOCREngine:
                     # Chỉ thử sau khi mẫu chuẩn đã thất bại và chỉ bỏ đúng 1 ký tự,
                     # để không đổi cách đọc những cụm đang đọc đúng (đo trên CBP0005 p09).
                     ms = sep1.match(g[1:])
+                if not ms and len(g) > 5 and g[-1] == "1":
+                    # Đối xứng: nét thừa có thể rơi ở CUỐI cụm - '20/8/2024' đọc thành
+                    # '2018120441' (lớp OCR Grayscale, CBP0005 p08). Cũng chỉ bỏ 1 ký tự.
+                    ms = sep1.match(g[:-1])
                 if ms:
                     add(ms.group(1), ms.group(2), "split", 0.65)
             for g in seq:
@@ -540,19 +544,29 @@ class PDFGridOCREngine:
         Không bao giờ điền Tháng/Năm suy đoán từ thư mục Kỳ vào ô trống.
         """
         dets = dets or []
-        result = {
+        if not raw_text or len(raw_text.strip()) < 2:
+            return self._blank_parse(raw_text)
+        return self._parsed_from_candidates(
+            self._build_candidates(raw_text, dets, default_year), raw_text
+        )
+
+    @staticmethod
+    def _blank_parse(raw_text: str) -> Dict:
+        return {
             "date": None,
             "candidates": [],
             "start_time": None,
             "end_time": None,
-            "raw_ocr": raw_text.strip(),
+            "raw_ocr": (raw_text or "").strip(),
             "warning": None,
             "confidence": 0.0,
         }
-        if not raw_text or len(raw_text.strip()) < 2:
-            return result
 
-        cands = self._build_candidates(raw_text, dets, default_year)
+    @staticmethod
+    def _parsed_from_candidates(cands: List[Dict], raw_text: str) -> Dict:
+        """Phần còn lại của clean_and_parse_datetime: quyết định TỪ danh sách phương án
+        (đã có thể được gộp từ nhiều lớp tiền xử lý trên cùng một clip)."""
+        result = PDFGridOCREngine._blank_parse(raw_text)
         result["candidates"] = cands
         if not cands:
             return result
@@ -734,6 +748,126 @@ class PDFGridOCREngine:
                 return int(x)
         return None
 
+    def _session_geometry(self, page_img: np.ndarray) -> Tuple[Optional[Dict], Optional[int]]:
+        """
+        Tra (geo, divider) dung mot nguong cho CA hai gia tri (khong tron geo nguong
+        nay voi divider nguong khac - de band doc duoc tung theo dung huong dan ke).
+        Net ke bi dut khi scan (CBP0007 trang 8) khong qua duoc nguong mac dinh 0.45:
+        thu lai mem 0.35. Do tren CBP0005/CBP0007, nguong 0.35 chi them duong ke that
+        (+/- 1-2px o cac trang khac) va KHONG sinh duong ke gia tren trang van ban
+        (trang 'MUC TIEU' van tra divider=None o moi nguong).
+        """
+        geo = self.analyze_page_geometry(page_img)
+        divider = self._session_column_divider(geo)
+        if divider is None:
+            geo2 = self.analyze_page_geometry(page_img, line_threshold=0.35)
+            divider2 = self._session_column_divider(geo2)
+            if divider2 is not None:
+                return geo2, divider2
+        return geo, divider
+
+    # Mot detection co dang dd/mm/yyyy day du = ngay IN SAN trong cot 'THOI GIAN'
+    # (do CBP0007: '3/8/2024', '10/8/2024', '1/9/2024' - diem OCR 0.97-1.00).
+    # Buoc toan bo chuoi bang ^...$ de 'Buổi 7', 'Ngày', 'Từ ngày 1-6:', '2024.09.15'
+    # khong lọt (thuc te đo: chung never match).
+    _DATE_TOKEN_RE = re.compile(r"^\s*(\d{1,2})\s*[/.\-]\s*(\d{1,2})\s*[/.\-]\s*(\d{2,4})\s*$")
+
+    @classmethod
+    def _typed_date_dets(cls, dets: List[Dict]) -> List[Dict]:
+        """Nhung detection co dang mot ngay day du (but den in san), diem giam dan."""
+        hits = [d for d in dets if cls._DATE_TOKEN_RE.match((d.get("text") or "").strip())]
+        hits.sort(key=lambda d: -float(d.get("score") or 0.0))
+        return hits
+
+    def _merge_candidate_pools(self, pools: List[List[Dict]]) -> List[Dict]:
+        """
+        Gom phương án của NHIỀU lớp tiền xử lý chạy trên CÙNG MỘT clip.
+        Khong sinh ngày mới: mỗi phương án đều do OCR đọc ra từ chính ảnh đó.
+        Thứ tự = vị trí của phương án trong lớp sinh ra nó (phương án dẫn đầu của mỗi
+        lớp được coi như nhau), cùng vị trí thì điểm OCR cao hơn thắng.
+        'votes' = số lớp đọc ra trùng ngày - bằng chứng thêm, chưa dùng để xếp.
+        """
+        pool: Dict[str, Dict] = {}
+        for lst in pools:
+            for rank, c in enumerate(lst):
+                e = pool.get(c["date"])
+                if e is None:
+                    pool[c["date"]] = dict(c, rank=rank, votes=1)
+                    continue
+                e["votes"] += 1
+                e["rank"] = min(e["rank"], rank)
+                if c["score"] > e["score"]:
+                    for k in ("score", "basis", "guessed", "year_from_period_prior",
+                              "printed_suspect", "day", "month", "year"):
+                        e[k] = c[k]
+        merged = sorted(pool.values(), key=lambda e: (e["rank"], -e["score"]))[:3]
+        for e in merged:
+            e.pop("rank", None)
+        return merged
+
+    @staticmethod
+    def _blue_read_is_weak(parsed: Dict) -> bool:
+        """
+        Lop tach muc xanh chua doc chắc chắn -> đáng chạy thêm lớp Grayscale.
+        Do tren CBP0005: 4/10 ngaylop xanh doc SAI ('12/8'->02/08, '17/8'->19/01,
+        '20/8'->20/09, '22/8'->02/08) thi lop Grayscale doc DUNG ca 4, voi diem cao
+        hon (0.89-0.999 vs 0.71-0.88). Cac ngay lop xanh doc chac (separator/adjacent,
+        khong 'guessed') thi giu nguyen, khoi dat them mot lan OCR.
+        """
+        if not parsed.get("date"):
+            return True
+        cands = parsed.get("candidates") or []
+        return bool(cands and cands[0].get("guessed"))
+
+    @staticmethod
+    def _drop_lettery_dets(dets: List[Dict], max_letters: int = 2) -> List[Dict]:
+        """
+        Bo detection chan chu IN o lop Grayscale ('Buổi 5', 'Ngày', 'Số: 101031 PN') -
+        cung Nguong 2 chu cai ma _group_provenance dung de nghi van chu in.
+        """
+        return [d for d in dets
+                if sum(1 for ch in (d.get("text") or "") if ch.isalpha()) < max_letters]
+
+    def _read_session_clip(
+        self, crop: np.ndarray, clean_blue: np.ndarray, default_year: int
+    ) -> Tuple[Dict, str, str]:
+        """
+        Đọc một clip chữ viết tay trên phiếu Kiểu B: lớp mực xanh + (khi cần) lớp
+        Grayscale/Otsu trên CÙNG clip, rồi gộp phương án.
+        Trả (parsed, gate_raw, blue_raw):
+        - gate_raw = chuỗi thô của LỚP đã sinh ra phương án chốt, để kiểm tra
+          'cụm chữ chủ yếu là CHỮ' đánh giá đúng lớp đó;
+        - blue_raw = chuỗi của lớp xanh, dùng cho các kiểm tra vốn được thiết kế
+          theo lớp xanh (giữ nguyên số dòng phát ra trên CBP0005).
+        """
+        raw_text, dets = self.run_ocr_on_cell(clean_blue)
+        parsed = self.clean_and_parse_datetime(raw_text, default_year, dets)
+        if not self._blue_read_is_weak(parsed):
+            return parsed, raw_text, raw_text
+
+        g_raw_full, g_dets_full = self.run_ocr_on_cell(self._grayscale_fallback(crop))
+        # Nét in đan xen trong clip không phải đối tượng của lớp này: bỏ detection
+        # chan chu (xem _drop_lettery_dets) de khong dem so cua chu in lam bang chung.
+        g_dets = self._drop_lettery_dets(g_dets_full)
+        g_raw = " ".join(d["text"].strip() for d in g_dets)
+        if not re.search(r"\d", g_raw):
+            return parsed, raw_text, raw_text
+
+        g_parsed = self.clean_and_parse_datetime(g_raw, default_year, g_dets)
+        if not g_parsed["candidates"]:
+            parsed["raw_ocr"] = f"{raw_text.strip()}  ||  {g_raw.strip()}"
+            return parsed, raw_text, raw_text
+
+        src_of: Dict[str, str] = {}
+        for lst, raw in ((parsed["candidates"], raw_text), (g_parsed["candidates"], g_raw)):
+            for c in lst:
+                src_of.setdefault(c["date"], raw)
+        merged = self._merge_candidate_pools([parsed["candidates"], g_parsed["candidates"]])
+        win_raw = src_of.get(merged[0]["date"], raw_text) if merged else raw_text
+        combined = self._parsed_from_candidates(merged, win_raw)
+        combined["raw_ocr"] = f"{raw_text.strip()}  ||  {g_raw.strip()}"
+        return combined, win_raw, raw_text
+
     @staticmethod
     def _is_digit_dominant(raw_text: str, min_ratio: float = 0.6) -> bool:
         """Chuỗi OCR có giống một ngày viết tay không: ký số phải chiếm áp đảo so với chữ cái."""
@@ -774,12 +908,11 @@ class PDFGridOCREngine:
                 # Ngày viết tay chỉ nằm trong cột 'Thời gian' - giới hạn bằng chính
                 # đường kẻ dọc đầu tiên của bảng. Cột giữa/dưới (chữ ký, ghi chú) bị
                 # loại khỏi mọi cụm đưa vào OCR.
-                geo = self.analyze_page_geometry(img)
-                divider = self._session_column_divider(geo)
+                # Trang không có kẻ dọc phân cách cột 'Thời gian' -> không phải
+                # phiếu buổi: bỏ qua. Đo trên CBP0005, trang MỤC TIÊU in sẵn
+                # 'Từ ngày 1-6:', 'Từ ngày 7-15:' bị đọc thành 10/07/2024 (ngày giả).
+                geo, divider = self._session_geometry(img)
                 if divider is None:
-                    # Trang không có kẻ dọc phân cách cột 'Thời gian' -> không phải
-                    # phiếu buổi: bỏ qua. Đo trên CBP0005, trang MỤC TIÊU in sẵn
-                    # 'Từ ngày 1-6:', 'Từ ngày 7-15:' bị đọc thành 10/07/2024 (ngày giả).
                     continue
                 runs = self._blue_ink_row_runs(img)
                 right_limit = divider
@@ -801,15 +934,15 @@ class PDFGridOCREngine:
                     has_hw, clean_blue = self.prepare_handwriting_roi(crop)
                     if not has_hw:
                         continue
-                    raw_text, dets = self.run_ocr_on_cell(clean_blue)
-                    parsed = self.clean_and_parse_datetime(raw_text, default_year, dets)
-                    if parsed["date"] and not self._is_digit_dominant(raw_text):
+                    parsed, gate_raw, blue_raw = self._read_session_clip(
+                        crop, clean_blue, default_year)
+                    if parsed["date"] and not self._is_digit_dominant(gate_raw):
                         # Cụm mực xanh chủ yếu là CHỮ (ghi chú, đầu trang) -> vài số lọt
                         # vào không phải ngày: giữ gợi ý nhưng tuyệt đối không tự điền.
                         parsed["date"] = None
                         parsed["warning"] = ("Cụm viết chủ yếu là chữ, không đủ bằng chứng là ngày "
                                              "- bấm chọn nếu một trong các gợi ý đúng")
-                    if not parsed["date"] and not self._looks_like_date_fragment(raw_text):
+                    if not parsed["date"] and not self._looks_like_date_fragment(blue_raw):
                         continue  # chữ ký/nét viết khác, không phải ngày
                     conf = parsed["confidence"]
                     if parsed["date"] and parsed["candidates"] and parsed["candidates"][0]["guessed"]:
@@ -836,7 +969,8 @@ class PDFGridOCREngine:
 
                 if not page_results:
                     page_results = self._session_band_fallback(
-                        img, page_idx, prefix, default_year, start_no=seq_no
+                        img, page_idx, prefix, default_year, start_no=seq_no,
+                        geo=geo, divider=divider
                     )
                     seq_no += len(page_results)
                 extracted_sessions.extend(page_results)
@@ -856,28 +990,28 @@ class PDFGridOCREngine:
 
     def _session_band_fallback(
         self, page_img: np.ndarray, page_idx: int, prefix: str, default_year: int,
-        start_no: int = 0
+        start_no: int = 0, geo: Optional[Dict] = None, divider: Optional[int] = None
     ) -> List[Dict]:
         """
-        Dự phòng mực đen/xám: chia dải theo đường kẻ ngang, OCR Grayscale-Otsu cột 'Thời gian'.
-        CHẤP NHẬN khi chuỗi đọc được là ngày đầy đủ DD/MM/YYYY (số 3 nhóm có dấu phân cách)
-        để không bao giờ nhầm chữ in 'Từ ngày 1-6:' thành ngày thật.
+        Duong doc rieng cho phieu KIEU B co NGAY IN SAN (but den), kich hoat khi
+        khong tim thay net viet tay mau xanh nao tren trang. Do tren CBP0007:
+        'blue_px_trong_cot = 0' o moi trang buoi, va ngay nam Y tren bang
+        (y ~ 130-200 tren bang cao 1542-1699px), nen ban cu loc min_y_ratio=0.35
+        da xa tha 11/12 ngay in san cua phieu nay.
+
+        Chi chap nhan detection co DANG MOT NGAY DAY DU dd/mm/yyyy
+        (_DATE_TOKEN_RE), khong doc ca chuoi cua bang: 'Buổi 7'/'Ngày'/'Từ ngày 1-6:'
+        due mot la khong du 3 nhom, mat nhom nam.
         """
-        results = []
-        geo = self.analyze_page_geometry(page_img)
-        if not geo or len(geo["v_lines"]) < 2 or len(geo["h_lines"]) < 2:
+        results: List[Dict] = []
+        if geo is None or divider is None:
+            geo, divider = self._session_geometry(page_img)
+        if not geo or divider is None or len(geo["h_lines"]) < 2:
             return results
 
         x, y, w, h = geo["rect"]
         lx = max(0, x - int(0.08 * w))
-        rx = None
-        for vx in geo["v_lines"]:
-            off = (vx - x) / float(w)
-            if 0.06 <= off <= 0.30:
-                rx = int(vx)
-                break
-        if rx is None:
-            rx = x + int(w * 0.16)
+        rx = int(divider)
 
         h_lines = geo["h_lines"]
         seen_dates = set()
@@ -890,14 +1024,31 @@ class PDFGridOCREngine:
                 continue
 
             gray_img = self._grayscale_fallback(strip)
-            raw_text, dets = self.run_ocr_on_cell(gray_img, min_y_ratio=0.35)
-            if not re.search(r'\d{1,2}\s*[/\-.]\s*\d{1,2}\s*[/\-.]\s*\d{2,4}', raw_text):
+            raw_text, dets = self.run_ocr_on_cell(gray_img)
+            hits = self._typed_date_dets(dets)
+            if not hits:
                 continue
-            parsed = self.clean_and_parse_datetime(raw_text, default_year, dets)
+            top = hits[0]
+            parsed = self.clean_and_parse_datetime(top["text"].strip(), default_year, [top])
             if not parsed["date"] or parsed["date"] in seen_dates:
                 continue
             seen_dates.add(parsed["date"])
             conf = parsed["confidence"]
+
+            # Ngay in san doc ro (diem >= CONFIDENCE_HIGH, chi mot ngay trong o, khong
+            # phai tach cu so dinh) -> khong phat them nguoi dung phai soat nua.
+            ambiguous = False
+            for dt in hits[1:]:
+                other = self.clean_and_parse_datetime(dt["text"].strip(), default_year, [dt])
+                if other["date"] and other["date"] != parsed["date"]:
+                    ambiguous = True
+                    break
+            best_cand = parsed["candidates"][0]
+            solid = (conf >= self.CONFIDENCE_HIGH and not best_cand.get("guessed")
+                     and not best_cand.get("printed_suspect") and not ambiguous)
+            warning = parsed["warning"]
+            if not solid:
+                warning = (warning or "") + " (ngày in sẵn, cần soát)"
 
             snippet_name = f"{prefix}_p{page_idx + 1:02d}_fb{band + 1}.jpg"
             snippet_path = os.path.join(self.snippets_dir, snippet_name)
@@ -910,11 +1061,11 @@ class PDFGridOCREngine:
                 "candidates": parsed["candidates"],
                 "start_time": parsed["start_time"],
                 "end_time": parsed["end_time"],
-                "raw_ocr": parsed["raw_ocr"],
-                "warning": (parsed["warning"] or "") + " (bút đen, cần soát)",
+                "raw_ocr": f"[in] {top['text'].strip()}  ||  {raw_text.strip()}",
+                "warning": warning,
                 "confidence": round(float(conf), 4),
                 "snippet_path": snippet_path,
-                "needs_review": True
+                "needs_review": (not solid) or (conf < self.CONFIDENCE_MED)
             })
         return results
 

@@ -51,7 +51,9 @@ viethealth_ocr/                     # THƯ MỤC GỐC DỰ ÁN (trạng thái �
 
 > 📌 **Cập nhật so với kế hoạch ban đầu:** `excel_handler.py` → `excel_exporter.py`; thư mục `web_app/` → một file `web_app.py` duy nhất; model lưu ở `models_storage/paddlex/` thay vì `local_models/`; **EasyOCR → PaddleOCR** (xem [`Kien_truc_OCR_va_Quy_trinh_duyet.md`](./Kien_truc_OCR_va_Quy_trinh_duyet.md) mục 4–5). See [`AGENTS.md`](../AGENTS.md) for quy ước chi tiết.
 >
-> ⚠️ **Bài học đo lường:** con số "41/45 = 91.1%" từng báo cáo là **độ phủ** (đếm cả ô điền sai); benchmark độ phủ đó đã bị xóa. Từ giờ chỉ tin `bench_accuracy.py`, so với ngày do **người** đọc trên ảnh cắt. Kết quả hiện tại trên `Test_doc_PDF_2.pdf`: **EXACT 6/10 (60%)**, **TOP-N 10/10 (100%)** — tức AI tự điền đúng 60%, nhưng 100% ô có đáp án đúng nằm trong gợi ý để người dùng bấm.
+> ⚠️ **Bài học đo lường:** con số "41/45 = 91.1%" từng báo cáo là **độ phủ** (đếm cả ô điền sai); benchmark độ phủ đó đã bị xóa. Từ giờ chỉ tin `bench_accuracy.py`, so với ngày do **người** đọc trên ảnh cắt.
+>
+> ✅ **Kết quả đo đa file gần nhất (20/10/2026, 3 ground truth / 32 ngày do người đọc): EXACT 31/32 = 96.9%**, **TOP-N 32/32 = 100%**, GIẢ 0, NGUY HIỂM 0 — tức AI **tự điền đúng 96.9%** trên dữ liệu đo được, vượt mốc 90% của đề bài. Chi tiết từng file và **phân bổ tăng số (bao nhiêu ô nhờ code, bao nhiêu ô nhờ đính chính ground truth)** xem [`Kien_truc_OCR_va_Quy_trinh_duyet.md`](./Kien_truc_OCR_va_Quy_trinh_duyet.md) mục 7. Lưu ý: mới chỉ đo trên **3 file**, chưa phải kết luận cho toàn bộ hồ sơ.
 
 ---
 

@@ -2,17 +2,17 @@
   "_doc": "Ground truth cho benchmark do CHINH XAC (bench_accuracy.py). Ngay ghi o day do NGUOI doc truc tiep anh cat tren PDF, khong phai do AI sinh ra. Key = duong dan tuyet doi file PDF; gia tri = { 'so_o': 'dd/mm/yyyy' }.",
   "docs": {
     "D:\\VietHealth\\INC3b - Documents\\6. Bao cao\\7. Ho so can thiep\\2. Ho so theo ky\\2026.10.20\\Can thiep\\N6\\ABP0055 Nguyễn Thị Ngần\\Test_doc_PDF_2.pdf": {
-      "note": "Kieu A - luoi 30 o, trang cuoi 2960x1374. Chi 10 o co viet tay (cot 1-2, hang 1-5). Do truc tiep tu anh cat _debug montage ngay 19/10/2026.",
+      "note": "Kieu A - luoi 30 o, trang cuoi 2960x1374. Chi 10 o co viet tay (cot 1-2, hang 1-5). BAN DUNG LAI 20/10/2026: 4 o#1/o#7/o#19/o#25 trong GT ghi ngay 19/10 (doc tu montage nho) da NGUOI xac nhan lai tren anh phong 3-6 lan (benchmarks/evidence/Test_doc_PDF_2_kieu_a_truth_3x.jpg va so_sanh_net_*.jpg) va SUA theo net that: o#1 24/01->24/07, o#7 30/01->30/07 (net thang giong het so 7 da chot o#13), o#19 05/09->05/08, o#25 26/08->06/08 (vong kin, khong co net ngang day cua so 2 o#26). Bang chung doc lap voi ket qua OCR: sau khi sua, cot 1 (o#1,7,13,19,25) = 24/07, 30/07, 31/07, 05/08, 06/08 va cot 2 (o#2,8,14,20,26) = 10/08, 13/08, 17/08, 20/08, 24/08 - ca hai cot tang dan dung lich, GT cu thi gay chuoi o#1/o#7.",
       "sessions": {
-        "1": "24/01/2026",
+        "1": "24/07/2026",
         "2": "10/08/2026",
-        "7": "30/01/2026",
+        "7": "30/07/2026",
         "8": "13/08/2026",
         "13": "31/07/2026",
         "14": "17/08/2026",
-        "19": "05/09/2026",
+        "19": "05/08/2026",
         "20": "20/08/2026",
-        "25": "26/08/2026",
+        "25": "06/08/2026",
         "26": "24/08/2026"
       }
     },
@@ -33,6 +33,27 @@
         "8": "22/08/2024",
         "9": "24/08/2024",
         "10": "27/08/2024"
+      }
+    },
+    "D:\\VietHealth\\INC3b - Documents\\6. Bao cao\\7. Ho so can thiep\\2. Ho so theo ky\\2024.09.15\\GDDB\\CBP0007 Lê Hoàng Bách.pdf": {
+      "note": "Kieu B - ngay IN SAN mau den (khong co bui tay): do 'blue_px_trong_cot' = 0 o ca 10 trang. 12 ngay do NGUOI doc truc tiep tu 12 o anh cat trong benchmarks/evidence/CBP0007_kieu_b_in_den_truth.jpg (nhan '#box -> ngay', thu tu p04 band2, p04 band3, p05, p06, p07, p08, p09, p10). OCR doc tung ngay nay voi diem 0.97-1.00. Nam 2024 in roi trong tung ngay, khong lay tu ten thu muc Ky.",
+      "resolve": {
+        "base": "D:\\VietHealth\\INC3b - Documents\\6. Bao cao\\7. Ho so can thiep\\2. Ho so theo ky\\2024.09.15\\GDDB",
+        "contains": "CBP0007"
+      },
+      "sessions": {
+        "1": "03/08/2024",
+        "2": "04/08/2024",
+        "3": "10/08/2024",
+        "4": "11/08/2024",
+        "5": "17/08/2024",
+        "6": "18/08/2024",
+        "7": "24/08/2024",
+        "8": "25/08/2024",
+        "9": "31/08/2024",
+        "10": "01/09/2024",
+        "11": "07/09/2024",
+        "12": "08/09/2024"
       }
     }
   }

@@ -4,7 +4,8 @@ Tài liệu này ghi lại **các quy ước và cạm bẫy thực tế** đã 
 
 ## 1. Bối cảnh dự án
 
-* Mục tiêu cốt lõi: **AI tự đọc > 90% ngày viết tay trên PDF chấm công can thiệp → tự điền → người dùng xác nhận/sửa → lưu → xuất Excel**, chạy **100% offline**.
+* Mục tiêu cốt lõi: **AI tự đọc > 90% ngày ghi trên PDF chấm công can thiệp → tự điền → người dùng xác nhận/sửa → lưu → xuất Excel**, chạy **100% offline**.
+  * **Đã đo đạt trên dữ liệu hiện có** (20/10/2026, 3 ground truth / 32 ngày do người đọc): **EXACT 31/32 = 96.9%**, TOP-N 32/32 = 100%, GIẢ 0, NGUY HIỂM 0. Con số này **chưa phải kết luận trên toàn bộ hồ sơ** — mới chỉ là 3 file; 4/32 ô tăng là nhờ đính chính ground truth (có người xác nhận), không phải nhờ code.
 * Stack: Python + Django (single-file app) + PaddleOCR/PaddlePaddle (CPU, offline) + OpenCV + PyMuPDF + SQLite.
 * Không có build system, không có test framework. Không thêm dependency trừ khi thật sự cần.
 
@@ -26,14 +27,15 @@ Tài liệu này ghi lại **các quy ước và cạm bẫy thực tế** đã 
 * **Luôn lấy đường dẫn bằng `os.walk`** rồi dùng lại giá trị trả về, thay vì tự ghép/xuất.
 * Trong `powershell -Command "..."` được gọi từ tool, ký tự `$` có thể bị loại bỏ làm hỏng script. → Dùng Python cho các phép kiểm tra file/thư mục.
 
-### 3.2. Hai kiểu phiếu — đừng giả định chỉ có lưới 30 ô
-* `process_pdf()` là **dispatcher**: phân tích hình học trang cuối, `v_lines >= 6` → **Kiểu A** (lưới 30 ô), ngược lại → **Kiểu B** (phiếu rời từng buổi, nhiều trang).
-* Kiểu B: phải duyệt **tất cả các trang**, và giới hạn vùng đọc đến **đường kẻ dọc đầu tiên của bảng** (`_session_column_divider`, tìm trong 5–35% bề rộng khung). Bỏ bước này sẽ đọc nhầm **chữ ký, số điện thoại, dòng "Mã số", cột "Nội dung"** thành ngày (đã đo trên CBP0005).
+### 3.2. Ba dạng phiếu — đừng giả định chỉ có lưới 30 ô
+* `process_pdf()` là **dispatcher**: phân tích hình học trang cuối, `v_lines >= 6` → **Kiểu A** (lưới 30 ô), ngược lại → **Kiểu B** (phiếu rời, nhiều trang). Trong Kiểu B có **hai dạng bút tích**: viết tay mực xanh (`CBP0005`) và **ngày in đen đánh máy** (`CBP0007`).
+* Kiểu B viết tay: phải duyệt **tất cả các trang**, và giới hạn vùng đọc đến **đường kẻ dọc đầu tiên của bảng** (`_session_column_divider`, tìm trong 5–35% bề rộng khung). Bỏ bước này sẽ đọc nhầm **chữ ký, số điện thoại, dòng "Mã số", cột "Nội dung"** thành ngày (đã đo trên CBP0005).
 * **Cắt dải theo giao số, không lọc theo tâm**: một dòng chứa cả ngày (trái) lẫn ghi chú (phải) có tâm nằm ngoài cột ngày nhưng phần bên trái vẫn là ngày thật. Lọc theo tâm từng làm mất 2 ngày của CBP0005 trang 4.
 * **Trang không có kẻ dọc trong 5–35% bề rộng là trang văn bản in** (MỤC TIÊU / TÓM TẮT / NHẬN ĐỊNH) → `continue` trước cả fallback. Trang MỤC TIÊU in sẵn "Từ ngày 1-6:", "Từ ngày 7-15:" từng bị đọc thành `10/07/2024` (ngày giả).
-* **Đã đo và loại bỏ** (đừng thử lại): nới lề trái cụm cắt (hằng số cố định hay lan tới khoảng trắng đều kéo nét kẻ bảng vào crop, `10/8` → `04/01`), tách một dải cao theo dòng chữ in (không đổi kết quả), phóng to ảnh OCR lên 640px (không đổi chỉ số, chậm hơn).
-* ⚠️ Kiểu B hiện đạt **EXACT 5/10, TOP-N 7/10** trên `CBP0005` (tìm đủ 10/10 ô, 0 ngày giả). Phần còn sai thuộc **nhận dạng nét** ('8' → '9'/'1'), không phải định vị.
-* Kiểu B có **hai dạng bút tích**: viết tay bằng mực xanh (`CBP0005`) và **chữ IN đen đánh máy** (`CBP0007` - chỉ ra 1 buổi vì bước tách mực xanh loại chữ in theo thiết kế). Dạng thứ hai cần đường đọc riêng chưa làm; bằng chứng `benchmarks/evidence/CBP0007_p06_dates_are_typed_print.jpg`.
+* **Đường kẻ dọc đứt khi scan** (`CBP0007` trang 8) không qua ngưỡng mặc định 0.45 → `_session_geometry()` thử lại với `line_threshold=0.35`. Đo trên CBP0005/CBP0007: ngưỡng 0.35 chỉ thêm đường kẻ thật (±1–2 px), **không** sinh kẻ giả trên trang văn bản (trang MỤC TIÊU vẫn trả `divider=None`).
+* **Hai lớp tiền xử lý trên CÙNG một clip** (`_read_session_clip`): lớp mực xanh trước; chỉ chạy thêm lớp Grayscale/Otsu khi `_blue_read_is_weak()` (không ra ngày, hoặc phương án dẫn đầu `guessed`), rồi **gộp** phương án (`_merge_candidate_pools`). Đây là thay đổi đưa `CBP0005` từ **5/10 → 9/10 EXACT** (4 ô mà lớp xanh đọc sai thì lớp Grayscale đọc đúng với điểm cao hơn). Giá phải trả: `CBP0005` **156 s → 403 s/file**. Khi hợp nhất, các cổng chặn cũ phải được kiểm trên **lớp đã sinh ra phương án chốt** (`gate_raw`), không phải chuỗi thô của lớp xanh.
+* **Đường đọc riêng cho ngày in đen** (`_session_band_fallback`): kích hoạt khi trang không còn nét viết tay xanh. Chỉ nhận detection **match toàn bộ chuỗi** theo `dd/mm/yyyy` (`_DATE_TOKEN_RE`, năm bắt buộc), không lọc `min_y_ratio` (ngày in của `CBP0007` nằm **trên cùng** dải, bộ lọc cũ từng xóa 11/12 ngày). Kết quả `CBP0007`: **12/12 EXACT** (trước bản này chỉ 1 buổi). `solid` (điểm ≥ `CONFIDENCE_HIGH`, không `guessed`/`printed_suspect`, không có ngày thứ hai mâu thuẫn trong cùng ô) → `needs_review=False`.
+* **Đã đo và loại bỏ** (đừng thử lại): nới lề trái cụm cắt (hằng số cố định hay lan tới khoảng trắng đều kéo nét kẻ bảng vào crop, `10/8` → `04/01`), tách một dải cao theo dòng chữ in cho phiếu viết tay (không đổi kết quả), phóng to ảnh OCR lên 640px (không đổi chỉ số, chậm hơn), và **prior chuỗi buổi (DP) để đẩy phương án `confusable` lên đứng đầu** — người dùng **CHỐI** vì vi phạm bất biến mục 3.4.
 * `process_pdf()` vẫn còn điểm yếu: `geo is None` ở *trang cuối* rơi vào nhánh Kiểu A.
 * Mọi PDF trong dữ liệu thật đều là **ảnh scan thuần, không có text layer** — đừng thử đọc text layer.
 
@@ -45,6 +47,7 @@ Tài liệu này ghi lại **các quy ước và cạm bẫy thực tế** đã 
 * `CONFIDENCE_HIGH = 0.60`, `CONFIDENCE_MED = 0.40` (trong `pdf_grid_ocr.py`) — thang điểm thật của PaddleOCR (0..1 trên cụm số), **khác** thang cũ của EasyOCR (0.45/0.30/0.15).
 * Độ tin cậy chỉ tính trên **cụm số**; tuyệt đối không trung bình hóa toàn bộ detection (chữ ký/tên in sẵn sẽ kéo điểm lên ảo).
 * Phương án phải **tách/đoán** (`split`, `prefix`) hoặc **nhầm nét chữ số** (`confusable`) bị đánh dấu `guessed` và hạ dưới `CONFIDENCE_MED` để buộc người dùng soát. `confusable` không bao giờ được đứng đầu danh sách → không bao giờ được tự điền.
+  ⚠️ Bất biến này **giữ nguyên cả khi hợp nhất nhiều lớp tiền xử lý**, và **kể cả khi** dùng prior "các buổi tăng dần theo thứ tự" để biện minh cho đáp án (đã đo: prior chuỗi đẩy được `CBP0005` ô#9 lên `24/08` tức 10/10, nhưng người dùng **chối** vì đó là tự điền một ngày AI chỉ *đoán*).
 * Phương án có `printed_suspect = True` (cả 2 số chỉ đến từ detection **lẫn ≥2 chữ cái** → nhiều khả năng là chữ in chân trang/đầu dòng) hoặc nằm trong cụm OCR **chủ yếu là chữ** (`_is_digit_dominant`) → `date = None`, chỉ còn gợi ý. Đây là luật chặn "bịa ngày từ chữ in", tuyệt đối không được nới.
 * Chuỗi chỉ toàn số `1` (`'1 1'`, `'1111'`) = **viền bảng đứng** bị OCR thành chữ số → loại outright, không sinh phương án.
 * Ngưỡng 🟢 cũng được lặp lại trong inline template của `web_app.py` — **sửa ở đây phải sửa ở đó**.
@@ -78,7 +81,8 @@ Tài liệu này ghi lại **các quy ước và cạm bẫy thực tế** đã 
 2. Với thay đổi OCR: chạy `bench_accuracy.py` trên **dữ liệu thật** và báo con số cụ thể (tử số/mẫu số, %), không suy đoán.
    ⚠️ Phải báo **EXACT trước, TOP-N sau**: EXACT mới là thước đo yêu cầu "AI tự đọc"; TOP-N (đúng trong gợi ý) **không được** dùng để tuyên bố đạt mốc >90% tự động.
    Chỉ số lấy từ 1 file duy nhất là **chưa đủ** để kết luận — phải đo trên nhiều file thật (cả Kiểu A lẫn Kiểu B).
-   Lần đo đa file gần nhất (20/10/2026, `benchmarks/ground_truth.json`): Kiểu A `Test_doc_PDF_2` **EXACT 6/10, TOP-N 10/10**; Kiểu B `CBP0005` **EXACT 5/10, TOP-N 7/10**; tổng **11/20 = 55% EXACT**, **17/20 = 85% TOP-N**, 0 ngày giả. Vẫn **chưa đạt mốc >90% tự điền** — báo riêng từng kiểu, không gộp một con số.
+   ⚠️ Nếu sửa `benchmarks/ground_truth.json` thì **phải nói rõ** ô nào tăng là nhờ sửa số đo, ô nào tăng là nhờ code. Không được im lặng sửa ground truth cho chỉ số "đẹp".
+   Lần đo đa file gần nhất (20/10/2026, **3** ground truth trong `benchmarks/ground_truth.json`): Kiểu A `Test_doc_PDF_2` **EXACT 10/10, TOP-N 10/10** (4/10 nhờ đính chính GT); Kiểu B viết tay `CBP0005` **EXACT 9/10, TOP-N 10/10**; Kiểu B in đen `CBP0007` **EXACT 12/12**; tổng **31/32 = 96.9% EXACT**, **32/32 = 100% TOP-N**, GIẢ 0, NGUY HIỂM 0. Ô còn sai: `CBP0005` ô#9 — `2` đầu ngày bị **cắt mất ở công đoạn định vị** (ảnh cắt chỉ còn `4 18 / 2024`), không phải lỗi nhận dạng nét.
 3. Với thay đổi UI/luồng: gọi HTTP thật vào `/scan/`, `/save-all/` và **kiểm tra lại DB bằng SQL**, hoặc render trình duyệt + ảnh chụp.
 4. Không rút gọn yêu cầu để cho "đỗ" dễ hơn — đặc biệt ngưỡng **> 90%** là yêu cầu cứng.
 
@@ -89,7 +93,9 @@ Cấu trúc OneDrive thật, dùng để benchmark:
 ```
 D:\VietHealth\INC3b - Documents\6. Bao cao\7. Ho so can thiep\2. Ho so theo ky\
 ├── 2026.10.20\Can thiep\N6\ABP0055 <Tên trẻ>\...pdf     # Kiểu A (lưới 30 ô), có tầng "Can thiep" + nhóm
-└── 2024.09.15\GDDB\CBPxxxx <Tên>.pdf                    # Kiểu B (phiếu rời), KHÔNG có tầng cán bộ
+├── 2024.09.15\GDDB\CBPxxxx <Tên>.pdf                    # Kiểu B (phiếu rời), KHÔNG có tầng cán bộ
+│   ├── CBP0005  # ngày VIẾT TAY mực xanh
+│   └── CBP0007  # ngày IN đen đánh máy, đường kẻ dọc bị đứt ở trang 8
 ```
 
 * `path_parser.py` nhận diện **kỳ** bằng regex `^\d{4}[.\-/]\d{1,2}([.\-/]\d{1,2})?$` ở **bất kỳ tầng nào**, và cho phép **thiếu tầng cán bộ** (bố cục 2024).

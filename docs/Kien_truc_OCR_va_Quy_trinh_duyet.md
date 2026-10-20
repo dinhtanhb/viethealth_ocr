@@ -23,7 +23,8 @@ PyMuPDF render 300 DPI ──► analyze_page_geometry() ──► PHÂN NHÁNH 
       │                                  │
       └────────────┬─────────────────────┘
                    ▼
-     Tách mực xanh → OCR từng vùng → clean_and_parse_datetime()
+     Tách mực xanh → OCR từng vùng → (Kiểu B: nếu chưa chắc, OCR thêm lớp Grayscale trên
+     CÙNG clip rồi gộp phương án) → clean_and_parse_datetime()
                    ▼
      Danh sách session {box_number, date, candidates, start_time, end_time, raw_ocr, confidence, snippet_path}
                    ▼
@@ -34,9 +35,9 @@ PyMuPDF render 300 DPI ──► analyze_page_geometry() ──► PHÂN NHÁNH 
 
 ---
 
-## 2. Hai kiểu phiếu (phát hiện quan trọng nhất)
+## 2. Ba dạng phiếu (phát hiện quan trọng nhất)
 
-Toàn bộ PDF trong dữ liệu thật là **ảnh scan thuần, không có text layer**. Có **hai bố cục khác hẳn nhau**:
+Toàn bộ PDF trong dữ liệu thật là **ảnh scan thuần, không có text layer**. Có **hai bố cục khác nhau**, và trong bố cục Kiểu B có **hai dạng bút tích**:
 
 | | **Kiểu A — Lưới chấm công** | **Kiểu B — Phiếu rời từng buổi** |
 | :--- | :--- | :--- |
@@ -45,6 +46,7 @@ Toàn bộ PDF trong dữ liệu thật là **ảnh scan thuần, không có tex
 | Vị trí ngày | 35% phần **đỉnh mỗi ô** | Cột trái ("THỜI GIAN") của bảng |
 | `box_number` | Số ô 1–30 | Số trang (`page_idx + 1`) |
 | Ví dụ dữ liệu | `.../2026.10.20/Can thiep/N6/ABP0055 …/x.pdf` | `.../2024.09.15/GDDB/CBPxxxx ….pdf` |
+| Dạng bút tích của Kiểu B | — | **viết tay mực xanh** (`CBP0005`) hoặc **ngày in đen đánh máy** (`CBP0007`) → hai đường đọc khác nhau ở mục 3 |
 
 ### Cách phát hiện hình học
 `analyze_page_geometry()` trả về `{"rect", "h_lines", "v_lines"}`:
@@ -64,12 +66,22 @@ right_limit = gx + int(gw * 0.35)
 
 ---
 
-## 3. Tách chữ viết tay khỏi chữ in
+## 3. Tách chữ viết tay khỏi chữ in — và hai lớp tiền xử lý trên cùng một clip
 
 * **Lọc mực xanh:** `b − r > 20 và b > 45` → cô lập bút xanh, loại bỏ chữ in đen của form.
-* **Fallback grayscale Otsu** (`_grayscale_fallback`) khi vùng gần như không có mực xanh.
+* **Fallback grayscale Otsu** (`_grayscale_fallback`): gray → Otsu(INV) → OPEN 2×2 → invert → blur → phóng 2.2× + pad 24px. Khác với lọc xanh, lớp này **giữ lại chữ in đen**.
 * **`_blue_ink_row_runs()`**: projection theo hàng trên mask mực xanh của **cả trang**, gom các dải chữ viết tay liền kề.
-* **`_session_band_fallback()`**: dự phòng bằng mực đen, **bắt buộc khớp regex ngày đầy đủ `DD/MM/YYYY`** và đánh dấu `needs_review=True` (để tránh ăn nhầm dòng in sẵn "Từ ngày 1-6:").
+* **`_read_session_clip()` — ensemble hai lớp trên PHIẾU VIẾT TAY** (Kiểu B): chạy lớp xanh trước; nếu `_blue_read_is_weak()` (không ra ngày, hoặc phương án dẫn đầu bị `guessed`) thì chạy thêm lớp Grayscale **trên đúng clip đó**, bỏ detection lẫn ≥2 chữ cái (`_drop_lettery_dets`), rồi `_merge_candidate_pools()` gộp hai danh sách theo *(vị trí trong lớp sinh ra nó, −điểm OCR)*.
+  * **Không sinh ngày mới**: mọi phương án đều do OCR đọc ra từ chính ảnh; ensemble chỉ mở rộng **candidate pool**.
+  * `votes` (số lớp đọc trùng ngày) được ghi nhận nhưng **chưa dùng để xếp hạng**.
+  * cổng chặn `_is_digit_dominant` được áp trên **chuỗi thô của lớp đã sinh ra phương án chốt** (`gate_raw`), không phải chuỗi của lớp xanh.
+  * Đo trên `CBP0005`: EXACT **5/10 → 9/10**, thời gian **156 s → 403 s**/file (9 trang).
+* **`_session_band_fallback()` — đường đọc RIÊNG cho NGÀY IN ĐEN đánh máy** (`CBP0007`), kích hoạt khi trang không còn nét viết tay xanh:
+  * OCR cả dải Grayscale và chỉ nhận detection **match toàn bộ chuỗi** theo `dd/mm/yyyy` (`_DATE_TOKEN_RE`, năm bắt buộc), nên `Buổi 7`, `Ngày`, `Từ ngày 1-6:`, `2024.09.15` không lọt.
+  * **Không lọc `min_y_ratio`**: ngày in của `CBP0007` nằm ở **đỉnh** dải (y ≈ 130–200 trên bảng cao 1542–1699 px), bộ lọc 0.35 cũ đã xóa 11/12 ngày.
+  * `solid` = điểm ≥ `CONFIDENCE_HIGH` và phương án chốt không `guessed`/`printed_suspect` và không có ngày thứ hai mâu thuẫn trong cùng ô → `needs_review=False`; ngược lại kèm cảnh báo "(ngày in sẵn, cần soát)".
+  * Đo trên `CBP0007`: **12/12 EXACT**, điểm 0.95–1.00 (trước khi có đường đọc này chỉ trả về 1 buổi). `needs_review` chỉ tắt khi `solid` — với phiếu in đen sạch thì cả 12 ô đều `solid`.
+* **Ngưỡng nhận diện đường kẻ:** `_session_geometry()` dùng chung một ngưỡng cho `geo` và `divider`; nếu không thấy kẻ dọc, thử lại với `line_threshold=0.35` (nét kẻ bị **đứt khi scan** — `CBP0007` trang 8). Đã đo: 0.35 không sinh đường kẻ giả trên trang văn bản in.
 
 ---
 
@@ -113,6 +125,7 @@ if best["date"] and best["warning"]:
 ```
 
 * Ngưỡng 🟢 bị **lặp lại trong `HTML_TEMPLATE`** của `web_app.py` — đổi hằng số phải đổi cả template.
+* Bất biến này **giữ nguyên khi hợp nhất nhiều lớp tiền xử lý** (mục 3): `guessed`/`confusable` không bao giờ được đứng đầu và không bao giờ được tự điền, **kể cả khi** một prior bên ngoài (vd "các buổi phải tăng dần theo thứ tự") biện minh cho đáp án đó. Prior kiểu này đã đo được và **bị người dùng chối**.
 
 ---
 
@@ -158,16 +171,21 @@ ngược lại → ghi giá trị AI với `is_verified=0`.
   * `NGÀY` = đọc đúng riêng phần ngày; `NGUY HIỂM` = điền SAI mà điểm ≥ `CONFIDENCE_MED`;
   * `GIẢ` = ô AI tự điền ngày trong khi phiếu **không ghi ngày nào** (nguồn sai hại nhất, phải bằng 0).
 * ⚠️ Con số **`41/45 = 91.1%`** từng ghi ở đây là **độ phủ** do `bench_auto_read.py` (đã xóa) tính ra: nó đếm cả ô AI điền **sai**, nên thực tế 0 ngày đúng mà vẫn báo 91%. Không dùng lại kiểu đo đó.
-* Số liệu đa file gần nhất (20/10/2026, 2 ground truth trong `benchmarks/ground_truth.json`):
+* Số liệu đa file gần nhất (20/10/2026, **3** ground truth trong `benchmarks/ground_truth.json`):
 
   | Mẫu | EXACT | TOP-N | NGÀY | NGUY HIỂM | GIẢ |
   | :--- | :--- | :--- | :--- | :--- | :--- |
-  | Kiểu A `Test_doc_PDF_2.pdf` (ABP0055, kỳ `2026.10.20`, 10 ô) | 6/10 = 60% | 10/10 = 100% | 9/10 | 2 | 0 |
-  | Kiểu B `CBP0005` (kỳ `2024.09.15`, 10 buổi) | 5/10 = 50% | 7/10 = 70% | 6/10 | 0 | 0 |
-  | **Tổng** | **11/20 = 55%** | **17/20 = 85%** | 15/20 | 2 | **0** |
+  | Kiểu A `Test_doc_PDF_2.pdf` (ABP0055, kỳ `2026.10.20`, 10 ô) | **10/10 = 100%** | 10/10 = 100% | 10/10 | 0 | 0 |
+  | Kiểu B viết tay `CBP0005` (kỳ `2024.09.15`, 10 buổi) | **9/10 = 90%** | 10/10 = 100% | 9/10 | 0 | 0 |
+  | Kiểu B ngày in đen `CBP0007` (kỳ `2024.09.15`, 12 buổi) | **12/12 = 100%** | 12/12 = 100% | 12/12 | 0 | 0 |
+  | **Tổng** | **31/32 = 96.9%** | **32/32 = 100%** | 31/32 | **0** | **0** |
 
-  Kiểu B đã định vị đủ **10/10 ô**; ba ô còn sai thuộc **tầng nhận dạng nét** (`12/8`→`02/8`, `17/8`→`19/1`, `24/8`→`09/9`), không phải luật tách chuỗi. Vẫn **chưa đạt mốc >90% tự điền** — cần thêm ground truth cho nhiều file Kiểu A/Kiểu B khác.
-* Chi phí thật trên CPU: init engine ~18 s, **quét 1 file Kiểu A ~60–70 s**, Kiểu B nhiều trang ~200–270s/file (`CBP0005` 9 trang: 268 s). Một kỳ ~500 file ⇒ nhiều giờ, phải quét nền/từng phần.
+  Phân bổ tăng số **minh bạch** (bắt buộc báo riêng, không gộp một con số):
+  * **Nhờ code**: Kiểu B viết tay `CBP0005` **5/10 → 9/10** (ensemble hai lớp tiền xử lý, mục 3); Kiểu B in đen `CBP0007` **1 buổi → 12/12** (đường đọc chữ in + thử lại ngưỡng kẻ 0.35).
+  * **Nhờ đính chính ground truth** (người dùng đối chiếu nét trên ảnh phóng 6×, không phải code): 4 ô Kiểu A `Test_doc_PDF_2` 24/01→24/07, 30/01→30/07, 05/09→05/08, 26/08→06/08. Bằng chứng độc lập: sau đính chính, **cả hai cột ngày của bảng đều tăng dần** theo thứ tự buổi — GT cũ thì gãy chuỗi này.
+  * Ô còn sai duy nhất: `CBP0005` ô#9. Đây **không phải lỗi nhận dạng nét** mà là lỗi **định vị**: `_blue_ink_row_runs` cắt mất chữ số `2` đầu ngày (ảnh cắt chỉ còn `4 18 / 2024`), nên `24/08` chỉ còn là phương án `confusable` trong gợi ý. Prior chuỗi buổi (DP) từng đẩy được ô này lên đúng (10/10) nhưng **đã bị người dùng chối** vì vi phạm bất biến "`confusable` không bao giờ tự điền" (mục 5).
+* Chi phí thật trên CPU: init engine ~18 s, **quét 1 file Kiểu A ~60–70 s**, Kiểu B viết tay **một lớp 156 s → hai lớp 403 s**/file (`CBP0005` 9 trang), Kiểu B ngày in đen **~190 s**/file (`CBP0007` 10 trang, đo trực tiếp qua `POST /scan/`, tính cả nạp model). Một kỳ ~500 file ⇒ **10–18 giờ**, phải quét nền/từng phần.
+* Kiem chứng end‑to‑end qua HTTP that (20/10/2026, server `--noreload` chay bang engine moi): `POST /scan/` file `CBP0007` → DB **12 dòng**, **12/12 ngày đúng ground truth**, **0 dòng `is_verified=1`**, diem thap nhat **0.9473**. Sau do `POST /save-all/` xac nhan tay o#5 (`05/09/2024`) roi **quet lai**: van giu `05/09/2024` + `is_verified=1` (bất biến chống mất dữ liệu đã duyệt vẫn đúng với đường đọc chữ in mới).
 
 ---
 
