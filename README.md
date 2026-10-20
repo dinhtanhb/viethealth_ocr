@@ -14,6 +14,7 @@ Toàn bộ chạy **cục bộ trên máy cá nhân**: không gửi ảnh, khôn
 | 🧾 **Tự nhận dạng 3 dạng phiếu** | Engine tự phân nhánh theo hình học trang: lưới 30 ô (Kiểu A), phiếu rời viết tay mực xanh (Kiểu B), phiếu rời **ngày in đen đánh máy** (Kiểu B in sẵn). Không cần cấu hình tay. |
 | 🎯 **Hai lớp tiền xử lý trên cùng một clip** | Với phiếu Kiểu B, nếu lớp tách mực xanh chưa đọc chắc chắn, engine chạy thêm lớp Grayscale/Otsu **trên đúng clip đó** rồi **gộp** phương án của hai lớp — không sinh ngày mới, không tự điền phương án đoán. |
 | 👀 **Rà soát trực quan** | Ảnh cắt chữ viết tay + độ tin cậy AI + tối đa 3 phương án Ngày để bấm chọn + nhãn trạng thái 🟢🟡 trên từng dòng. |
+| 📅 **Lịch nhập tay có cả giờ** | Dòng AI **chưa đọc được ngày** (🔴) có nút **📅 Chọn ngày & giờ** mở lịch tháng (tiếng Việt, nhảy đúng tháng của thư mục kỳ) kèm ô **Giờ bắt đầu / Giờ kết thúc** ngay trong lịch — không phải gõ tay `DD/MM/YYYY`. |
 | ✅ **Xác nhận của người dùng là duy nhất** | AI không tự đánh dấu "đã xác nhận"; quét lại PDF **không ghi đè** ngày người dùng đã duyệt. |
 | 🔒 **100% Local & Offline** | PaddleOCR (CPU) + PyMuPDF + OpenCV + SQLite, không phụ thuộc Tesseract/Poppler. |
 
@@ -125,8 +126,13 @@ Mở trình duyệt: <http://127.0.0.1:8031/>
 4. Nếu AI đọc ra nhiều phương án, bảng hiện các **nút gợi ý** dưới ô Ngày: bấm chọn phương án đúng
    (nút nét đứt có dấu `?` là phương án **dự phòng do khả năng nhầm nét chữ số** – chỉ bấm khi ảnh cắt rõ là số đó).
    Bấm chọn đồng nghĩa đã đối chiếu nên ô **☑️ Xác nhận** được tick sẵn.
-5. **Sửa** Ngày/Giờ nếu cần, **tích ☑️ Xác nhận** cho dòng đã đối chiếu.
-6. Bấm **💾 Lưu toàn bộ thay đổi**, rồi **📥 Xuất File Excel (.xlsx)**.
+5. **Ô 🔴 (AI chưa đọc được ngày)**: bấm **📅 Chọn ngày & giờ** để mở lịch tháng, chọn ngày trong ô lịch,
+   chọn **Giờ bắt đầu / Giờ kết thúc** rồi bấm **✅ Áp dụng**. Lịch mở sẵn **đúng tháng của thư mục kỳ**
+   (nút *Tháng của kỳ …* / *Hôm nay* để nhảy nhanh). Ngày giờ ghi vào bảng theo đúng định dạng
+   `DD/MM/YYYY` và `HH:MM` (24 giờ); **độ tin cậy AI của dòng đó không bị thay đổi** (không tự cho điểm).
+   Dòng đã có ngày vẫn bấm được nút này để **sửa**.
+6. **Sửa** Ngày/Giờ nếu cần, **tích ☑️ Xác nhận** cho dòng đã đối chiếu.
+7. Bấm **💾 Lưu toàn bộ thay đổi**, rồi **📥 Xuất File Excel (.xlsx)**.
 
 > ⚠️ AI **không còn bịa ngày**: không mượn tháng từ tên thư mục kỳ, không ghép bừa hai cụm số bất kỳ,
 > độ tin cậy chỉ tính trên cụm số (không tính chữ ký). Ngày phải *tách/đoán* từ cụm số dính nhau luôn bị
@@ -151,6 +157,12 @@ So kết quả AI với **ground truth do người đọc tay** (`benchmarks/gro
 .\venv\Scripts\python.exe test_step1_ocr.py "<duong-dan-file-PDF>"
 ```
 
+### Kiểm thử UI lịch nhập Ngày + Giờ (không cần OCR)
+
+```powershell
+.\venv\Scripts\python.exe -X utf8 test_ui_calendar.py
+```
+
 ---
 
 ## 5. Cấu trúc dự án
@@ -169,6 +181,7 @@ viethealth_ocr/
 │   └── evidence/             # Ảnh cắt bằng chứng cho từng dòng ground truth Kiểu B
 ├── bench_accuracy.py           # Đo ĐỘ CHÍNH XÁC (EXACT / TOP-N) so với ground truth
 ├── test_step1_ocr.py           # Smoke test 1 file PDF
+├── test_ui_calendar.py         # Smoke test lịch 📅 chọn Ngày+Giờ trên UI (không cần OCR/browser)
 ├── setup_offline_models.py     # Tải & đóng gói model PaddleOCR
 ├── requirements.txt
 │
@@ -195,5 +208,6 @@ viethealth_ocr/
   0↔2) – chỉ để người dùng bấm, **không bao giờ được tự điền** kể cả khi prior "buổi tăng dần" ủng hộ nó.
 * **Năm chỉ lấy theo thư mục kỳ** khi ảnh OCR không đọc ra năm, và luôn kèm cảnh báo; Tháng **không** lấy từ kỳ.
 * **Paddle trên CPU bắt buộc `enable_mkldnn=False`**, nếu không crash `ConvertPirAttribute2RuntimeAttribute`.
+* **Lịch 📅 là JS tự chứa trong `web_app.py`** (không thư viện ngoài, không gọi mạng): lưới tháng tiếng Việt bắt đầu từ **T2**, ô giờ dùng `input[type=time]` của trình duyệt. Toàn bộ mã nằm trong `HTML_TEMPLATE` là chuỗi Python **không phải raw-string**, nên một cặp `\'` trong JS sẽ bị Python ăn mất và làm **chết cả khối `<script>`** (kể cả nút gợi ý cũ) — `test_ui_calendar.py` check parity dấu nháy để chặn đúng lỗi này; trong JS sinh HTML dùng `&#39;` thay vì `\'`.
 * **Migration an toàn:** `local_db` tự `ALTER TABLE` thêm cột mới (VD `ocr_confidence`) mà không mất dữ liệu cũ.
 * **Unicode trên Windows:** đường dẫn tiếng Việt nên lấy qua `os.walk`; chạy Python với `-X utf8`.

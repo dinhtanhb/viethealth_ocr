@@ -33,6 +33,7 @@ AI tự đọc **> 90%** ngày ghi trên PDF chấm công can thiệp (viết ta
 4. **Mọi PDF thật đều là scan thuần, không text layer.** Đường dẫn tiếng Việt phải lấy qua `os.walk` (không gõ tay — lệch Unicode NFC/NFD).
 5. **Message redirect phải dùng `urllib.parse.urlencode({...})`.** Ký tự `&` thô làm cắt cụt thông báo.
 6. **Ngưỡng tin cậy:** `CONFIDENCE_HIGH=0.60`, `CONFIDENCE_MED=0.40` (thang diem THAT cua PaddleOCR tren cum so; khong con `MIN_DATE_CONFIDENCE` cua EasyOCR). Phuong an `guessed` (tach cum so dinh / nho nham net chu so) bi ha xuong `CONFIDENCE_MED - 0.01` → UI bôi vàng dòng đó (`row-warn`) để bắt buộc người dùng soát; `confusable` không bao giờ được đứng slot 1 nên không bao giờ được tự điền. Do bang `bench_accuracy.py` voi ground truth do nguoi doc - khong do do phu. Ngưỡng 🟢 còn bị lặp trong `HTML_TEMPLATE` của `web_app.py` — sửa đồng bộ cả hai.
+7. **Ô không đọc được ngày phải có lịch nhập tay, không bắt gõ `DD/MM/YYYY`.** Nút **📅 Chọn ngày & giờ** (`openCal`/`calApply` trong `HTML_TEMPLATE`) mở lịch tháng tiếng Việt **kèm Giờ bắt đầu / Giờ kết thúc**, tự nhảy tới đúng tháng của thư mục kỳ. Lịch chỉ ghi ngày/giờ + tick ☑️ Xác nhận, **không sửa `ocr_confidence`**. Cảnh báo kỹ thuật: `HTML_TEMPLATE` **không phải raw-string** nên `\'` trong JS bị Python ăn mất và làm chết cả khối `<script>` (dùng `&#39;`); sau khi sửa JS phải chạy `test_ui_calendar.py` **và** mở trang thật bằng browser để xác nhận hàm JS tồn tại.
 
 ## Kiến trúc nhanh
 

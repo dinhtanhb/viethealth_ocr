@@ -89,6 +89,34 @@ HTML_TEMPLATE = """
         .cand-btn:hover { background: #1f4e78; color: #fff; }
         .cand-alt { border-style: dashed; background: #fff9e6; color: #856404; border-color: #b8860b; }
         .cand-alt:hover { background: #b8860b; color: #fff; }
+        .btn-cal { margin-top: 4px; padding: 3px 8px; font-size: 11.5px; border: 1px solid #1f4e78;
+                   background: #fff; color: #163a59; border-radius: 4px; cursor: pointer; font-weight: 600; }
+        .btn-cal:hover { background: #eef4fa; }
+        .btn-cal-empty { background: #b8860b; border-color: #b8860b; color: #fff; }
+        .btn-cal-empty:hover { background: #8f6808; }
+        .cal-pop { position: absolute; z-index: 2000; width: 262px; background: #fff; border: 1px solid #1f4e78;
+                   border-radius: 8px; box-shadow: 0 6px 20px rgba(0,0,0,0.25); padding: 10px;
+                   text-align: left; font-size: 12.5px; color: #222; }
+        .cal-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; }
+        .cal-title { font-weight: 700; color: #1f4e78; }
+        .cal-nav { border: 1px solid #99b8d9; background: #eef4fa; color: #163a59; border-radius: 4px;
+                   padding: 3px 8px; cursor: pointer; font-weight: 600; font-size: 11.5px; }
+        .cal-nav:hover { background: #1f4e78; color: #fff; }
+        .cal-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 2px; }
+        .cal-dow { text-align: center; font-size: 10.5px; color: #666; font-weight: 700; padding: 2px 0; }
+        .cal-day { text-align: center; padding: 4px 0; border: 1px solid transparent; border-radius: 4px;
+                   cursor: pointer; background: #f7f9fb; }
+        .cal-day:hover { background: #dce9f7; }
+        .cal-blank { background: transparent; cursor: default; }
+        .cal-sel { background: #1f4e78 !important; color: #fff; font-weight: 700; }
+        .cal-today { border-color: #b8860b; }
+        .cal-quick { display: flex; gap: 4px; margin-top: 7px; flex-wrap: wrap; }
+        .cal-times { display: flex; gap: 8px; margin-top: 8px; }
+        .cal-times label { font-size: 11px; color: #555; display: flex; flex-direction: column; gap: 2px; }
+        .cal-times input { padding: 4px; border: 1px solid #aaa; border-radius: 4px; width: 88px; font-size: 12.5px; }
+        .cal-actions { display: flex; gap: 6px; justify-content: flex-end; margin-top: 9px; }
+        .cal-apply { padding: 6px 12px; font-size: 12.5px; }
+        .cal-hint { font-size: 10.5px; color: #777; margin-top: 6px; }
     </style>
 </head>
 <body>
@@ -106,6 +134,7 @@ HTML_TEMPLATE = """
         </form>
         <div style="margin-top:6px; font-size:12.5px; color:#555;">
             💡 <b>Mẹo:</b> AI tự đọc & điền Ngày vào từng dòng; nếu đọc ra nhiều phương án, bạn <b>bấm vào phương án đúng</b> bên dưới ô Ngày.
+            Dòng <span class="badge-bad">🔴</span> (AI chưa đọc được ngày) → bấm <b>📅 Chọn ngày &amp; giờ</b> để mở <b>lịch</b>, chọn ngày rồi chọn <b>Giờ BĐ / Giờ KT</b> ngay trong lịch.
             Rê chuột vào <b>Ảnh cắt chữ viết tay</b> để phóng to 2.5x.
             Dòng <span class="badge-warn">🟡</span> / <span class="badge-bad">🔴</span> cần bạn kiểm tra kỹ.
             Tích ☑️ <b>Xác nhận</b> (hoặc sửa Ngày/Giờ) rồi nhấn <b>Lưu toàn bộ thay đổi</b> trước khi xuất Excel.
@@ -167,20 +196,23 @@ HTML_TEMPLATE = """
                             {% endfor %}
                         </div>
                         {% endif %}
+                        <button type="button" class="btn-cal{% if not r.date %} btn-cal-empty{% endif %}"
+                                title="Mở lịch chọn Ngày và Giờ (dùng khi AI chưa đọc được hoặc bạn cần sửa)"
+                                onclick="openCal(this, '{{ r.session_id }}', '{{ r.period|escapejs }}')">📅 Chọn ngày &amp; giờ</button>
                     </td>
                     <td>
-                        <input type="text" name="start_{{ r.session_id }}" value="{{ r.start_time }}" class="inp-time" placeholder="08:00" />
+                        <input type="text" name="start_{{ r.session_id }}" id="start_{{ r.session_id }}" value="{{ r.start_time }}" class="inp-time" placeholder="08:00" />
                     </td>
                     <td>
-                        <input type="text" name="end_{{ r.session_id }}" value="{{ r.end_time }}" class="inp-time" placeholder="09:00" />
+                        <input type="text" name="end_{{ r.session_id }}" id="end_{{ r.session_id }}" value="{{ r.end_time }}" class="inp-time" placeholder="09:00" />
                     </td>
                     <td><small style="color:#666; font-family:monospace;">{{ r.raw_ocr }}</small></td>
                     <td>
                         {% if r.date %}<span class="conf-pill">{{ r.ocr_confidence|floatformat:2 }}</span>{% else %}—{% endif %}
                     </td>
-                    <td>
+                    <td id="status_{{ r.session_id }}">
                         {% if not r.date %}
-                            <span class="badge-bad">🔴 Chưa đọc được – nhập tay</span>
+                            <span class="badge-bad">🔴 Chưa đọc được – bấm 📅 chọn ngày &amp; giờ</span>
                         {% elif r.ocr_confidence >= 0.60 %}
                             <span class="badge-ok">🟢 AI tự đọc chắc chắn</span>
                         {% elif r.candidates and r.candidates|length > 1 %}
@@ -215,6 +247,201 @@ function pickDate(sid, val) {
     var chk = document.querySelector('input[name="confirm_' + sid + '"]');
     if (chk) chk.checked = true;
 }
+
+/* =====================================================================
+   LỊCH CHỌN NGÀY + GIỜ tự chứa (không thư viện ngoài, chạy 100% offline).
+   Dùng cho dòng AI chưa đọc được ngày (🔴) và để sửa cả dòng AI đã đọc.
+   ===================================================================== */
+var CAL_DOW = ['T2', 'T3', 'T4', 'T5', 'T6', 'T7', 'CN'];
+var CAL_MONTH = ['Tháng 1', 'Tháng 2', 'Tháng 3', 'Tháng 4', 'Tháng 5', 'Tháng 6',
+                 'Tháng 7', 'Tháng 8', 'Tháng 9', 'Tháng 10', 'Tháng 11', 'Tháng 12'];
+var _cal = null;
+
+function calPad2(n) { return (n < 10 ? '0' : '') + n; }
+
+/* Đọc chuỗi ngày DD/MM/YYYY (chấp nhận 1/8/2024, 01-08-2024, 8.9.24) */
+function calParseVN(s) {
+    var p = (s || '').replace(/[^0-9]+/g, ' ').trim().split(' ');
+    if (p.length !== 3) return null;
+    var d = parseInt(p[0], 10), mo = parseInt(p[1], 10), y = parseInt(p[2], 10);
+    if (y < 100) y += 2000;
+    if (!d || !mo || mo > 12 || d > 31) return null;
+    var dt = new Date(y, mo - 1, d);
+    if (dt.getMonth() !== mo - 1 || dt.getDate() !== d) return null;
+    return dt;
+}
+
+/* Thư mục Kỳ có dạng YYYY.M[.D] -> mở lịch đúng tháng của kỳ đó */
+function calParsePeriod(s) {
+    var p = (s || '').replace(/[^0-9]+/g, ' ').trim().split(' ');
+    if (p.length < 2) return null;
+    var y = parseInt(p[0], 10), mo = parseInt(p[1], 10);
+    if (y < 1900 || y > 2100 || mo < 1 || mo > 12) return null;
+    var d = p.length > 2 ? parseInt(p[2], 10) : 1;
+    if (!d || d > 31) d = 1;
+    return new Date(y, mo - 1, d);
+}
+
+function calNormTime(v) {
+    v = (v || '').trim();
+    if (!v) return '';
+    var p = v.split(':');
+    var h = parseInt(p[0], 10), mi = p.length > 1 ? parseInt(p[1], 10) : 0;
+    if (isNaN(h) || isNaN(mi) || h > 23 || mi > 59) return v;
+    return calPad2(h) + ':' + calPad2(mi);
+}
+
+function openCal(btn, sid, period) {
+    closeCal();
+    var dEl = document.getElementById('date_' + sid);
+    if (!dEl) return;
+    var sEl = document.getElementById('start_' + sid);
+    var eEl = document.getElementById('end_' + sid);
+    var sel = calParseVN(dEl.value);
+    var periodDate = calParsePeriod(period);
+    var anchor = sel || periodDate || new Date();
+    _cal = {
+        sid: sid,
+        btn: btn,
+        sel: sel,
+        period: periodDate,
+        periodLabel: period || '',
+        view: new Date(anchor.getFullYear(), anchor.getMonth(), 1),
+        start: sEl ? calNormTime(sEl.value) : '',
+        end: eEl ? calNormTime(eEl.value) : ''
+    };
+    var pop = document.createElement('div');
+    pop.className = 'cal-pop';
+    pop.id = 'cal_pop';
+    document.body.appendChild(pop);
+    calRender();
+    calPosition();
+}
+
+function calPosition() {
+    var pop = document.getElementById('cal_pop');
+    if (!pop || !_cal || !_cal.btn) return;
+    var r = _cal.btn.getBoundingClientRect();
+    var docW = document.documentElement.clientWidth;
+    var docH = document.documentElement.clientHeight;
+    var left = r.left + window.pageXOffset;
+    var top = r.bottom + window.pageYOffset + 4;
+    var maxLeft = window.pageXOffset + docW - pop.offsetWidth - 8;
+    var maxTop = window.pageYOffset + docH - pop.offsetHeight - 8;
+    if (left > maxLeft) left = Math.max(window.pageXOffset + 8, maxLeft);
+    if (top > maxTop) top = maxTop;   /* không để lịch bị cắt đáy màn hình */
+    if (top < window.pageYOffset + 8) top = window.pageYOffset + 8;
+    pop.style.left = left + 'px';
+    pop.style.top = top + 'px';
+}
+
+function calSyncTimes() {
+    if (!_cal) return;
+    var s = document.getElementById('cal_start');
+    var e = document.getElementById('cal_end');
+    if (s) _cal.start = calNormTime(s.value);
+    if (e) _cal.end = calNormTime(e.value);
+}
+
+function calRender() {
+    if (!_cal) return;
+    calSyncTimes();
+    var pop = document.getElementById('cal_pop');
+    if (!pop) return;
+    var y = _cal.view.getFullYear(), mo = _cal.view.getMonth();
+    var firstDow = (new Date(y, mo, 1).getDay() + 6) % 7;
+    var days = new Date(y, mo + 1, 0).getDate();
+    var today = new Date();
+    var html = '';
+    html += '<div class="cal-head"><button type="button" class="cal-nav" onclick="calMove(-1)">&#9664;</button>';
+    html += '<span class="cal-title">' + CAL_MONTH[mo] + ' ' + y + '</span>';
+    html += '<button type="button" class="cal-nav" onclick="calMove(1)">&#9654;</button></div>';
+    html += '<div class="cal-grid">';
+    for (var i = 0; i < 7; i++) html += '<div class="cal-dow">' + CAL_DOW[i] + '</div>';
+    for (var b = 0; b < firstDow; b++) html += '<div class="cal-day cal-blank"></div>';
+    for (var d = 1; d <= days; d++) {
+        var cls = 'cal-day';
+        if (_cal.sel && _cal.sel.getFullYear() === y && _cal.sel.getMonth() === mo && _cal.sel.getDate() === d) {
+            cls += ' cal-sel';
+        } else if (d === today.getDate() && mo === today.getMonth() && y === today.getFullYear()) {
+            cls += ' cal-today';
+        }
+        html += '<div class="' + cls + '" onclick="calPick(' + d + ')">' + d + '</div>';
+    }
+    html += '</div>';
+    html += '<div class="cal-quick">';
+    if (_cal.period) html += '<button type="button" class="cal-nav" onclick="calJump(&#39;p&#39;)">Tháng của kỳ ' + _cal.periodLabel + '</button>';
+    html += '<button type="button" class="cal-nav" onclick="calJump(&#39;t&#39;)">Hôm nay</button>';
+    html += '</div>';
+    html += '<div class="cal-times"><label>Giờ bắt đầu<input type="time" id="cal_start" value="' + _cal.start + '"></label>';
+    html += '<label>Giờ kết thúc<input type="time" id="cal_end" value="' + _cal.end + '"></label></div>';
+    html += '<div class="cal-actions"><button type="button" class="cal-nav" onclick="closeCal()">Hủy</button>';
+    html += '<button type="button" class="cal-nav cal-apply" onclick="calApply()">✅ Áp dụng</button></div>';
+    html += '<div class="cal-hint">Chọn ngày trong lịch, chọn Giờ BĐ / Giờ KT rồi bấm Áp dụng. Ngày do bạn nhập tay sẽ được tick ☑️ Xác nhận; độ tin cậy AI không bị ghi đè điểm.</div>';
+    pop.innerHTML = html;
+}
+
+function calMove(n) {
+    if (!_cal) return;
+    _cal.view = new Date(_cal.view.getFullYear(), _cal.view.getMonth() + n, 1);
+    calRender();
+}
+
+function calPick(d) {
+    if (!_cal) return;
+    _cal.sel = new Date(_cal.view.getFullYear(), _cal.view.getMonth(), d);
+    calRender();
+}
+
+function calJump(what) {
+    if (!_cal) return;
+    if (what === 'p' && _cal.period) {
+        _cal.view = new Date(_cal.period.getFullYear(), _cal.period.getMonth(), 1);
+    } else if (what === 't') {
+        var now = new Date();
+        _cal.sel = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+        _cal.view = new Date(now.getFullYear(), now.getMonth(), 1);
+    }
+    calRender();
+}
+
+function calApply() {
+    if (!_cal) return;
+    if (!_cal.sel) { alert('Bạn chưa chọn ngày trên lịch.'); return; }
+    calSyncTimes();
+    var sid = _cal.sid;
+    var dEl = document.getElementById('date_' + sid);
+    var sEl = document.getElementById('start_' + sid);
+    var eEl = document.getElementById('end_' + sid);
+    if (!dEl) { closeCal(); return; }
+    dEl.value = calPad2(_cal.sel.getDate()) + '/' + calPad2(_cal.sel.getMonth() + 1) + '/' + _cal.sel.getFullYear();
+    dEl.style.background = '#dff0d8';
+    if (sEl && _cal.start) sEl.value = _cal.start;
+    if (eEl && _cal.end) eEl.value = _cal.end;
+    var chk = document.querySelector('input[name="confirm_' + sid + '"]');
+    if (chk) chk.checked = true;
+    var cell = document.getElementById('status_' + sid);
+    if (cell) cell.innerHTML = '<span class="badge-ok">📅 Ngày giờ do người dùng chọn</span>';
+    closeCal();
+}
+
+function closeCal() {
+    var pop = document.getElementById('cal_pop');
+    if (pop && pop.parentNode) pop.parentNode.removeChild(pop);
+    _cal = null;
+}
+
+document.addEventListener('click', function (ev) {
+    var pop = document.getElementById('cal_pop');
+    if (!pop) return;
+    if (pop.contains(ev.target)) return;
+    var cn = String(ev.target.className || '');
+    if (cn.indexOf('btn-cal') >= 0) return; /* bấm nút 📅 dòng khác -> openCal tự mở lại */
+    closeCal();
+});
+document.addEventListener('keydown', function (ev) { if (ev.key === 'Escape') closeCal(); });
+window.addEventListener('scroll', function () { calPosition(); }, true);
+window.addEventListener('resize', function () { calPosition(); });
 </script>
 </body>
 </html>

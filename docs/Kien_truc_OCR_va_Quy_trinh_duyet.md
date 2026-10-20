@@ -156,10 +156,29 @@ ngược lại → ghi giá trị AI với `is_verified=0`.
 
 1. `POST /scan/` → quét file/thư mục, lưu AI kết quả, redirect kèm **% phủ sóng**.
 2. `GET /` → bảng rà soát: ảnh cắt (rê chuột phóng to 2.4×), ô sửa Ngày/Giờ, `ocr_confidence`, nhãn 🟢🟡, ☑️ Xác nhận.
-3. `POST /save-all/` → ghi Ngày/Giờ + trạng thái xác nhận.
-4. `GET /export-excel/` → xuất `.xlsx` từ `excel_exporter`.
+3. Với dòng 🔴 (**AI chưa đọc được ngày**) — và cả dòng đã có ngày cần sửa — bấm **📅 Chọn ngày & giờ** để mở **lịch nhập tay** (xem 6.4), thay vì phải gõ `DD/MM/YYYY`.
+4. `POST /save-all/` → ghi Ngày/Giờ + trạng thái xác nhận.
+5. `GET /export-excel/` → xuất `.xlsx` từ `excel_exporter`.
 
 **Mọi message redirect phải đi qua `urllib.parse.urlencode({...})`** — ký tự `&` thô làm cắt cụt thông báo từ điểm có `&`.
+
+### 6.4. Lịch nhập tay Ngày + Giờ (`openCal` / `calRender` / `calApply` trong `HTML_TEMPLATE`)
+
+* **Tự chứa, không thư viện ngoài, không gọi mạng** (đúng định hướng 100% offline): lưới tháng tiếng Việt
+  bắt đầu từ **T2**, tiêu đề `Tháng N YYYY`, nút ◀ ▶ đổi tháng, hai nút nhảy nhanh
+  *Tháng của kỳ …* (đọc `period` dạng `YYYY.M[.D]`) và *Hôm nay*.
+* **Lịch có cả giờ**: hai ô `Giờ bắt đầu` / `Giờ kết thúc` dùng `input[type=time]` của trình duyệt; giá trị được
+  chuẩn hóa về `HH:MM` (24 giờ) trước khi ghi vào bảng — trùng định dạng ô Giờ BĐ/KT và cột giờ trong Excel.
+* Mở lịch ở dòng đã có ngày thì **ngày đó được chọn sẵn**; dòng 🔴 mở ở **tháng của kỳ** và chưa chọn ngày nào.
+  Bấm *✅ Áp dụng* khi chưa chọn ngày sẽ bị chặn bằng thông báo — không ghi dữ liệu rỗng xuống DB.
+* Bất biến khi áp dụng: chỉ ghi `date_str` / `start_time` / `end_time` và tick ☑️ Xác nhận (hành động của con
+  người); **không đụng `ocr_confidence`** — dòng AI không đọc được vẫn hiển thị điểm cũ (thường là `—`), còn nhãn
+  Trạng thái đổi thành *“📅 Ngày giờ do người dùng chọn”*. Không bao giờ gán điểm giả cho ngày nhập tay.
+* Popover được kẹp trong viewport cả ngang lẫn dọc nên lịch không bị cắt đáy với dòng cuối bảng; đóng bằng `Esc`,
+  bấm ra ngoài, hoặc *Hủy*.
+* **Cạm bẫy đã gặp**: `HTML_TEMPLATE` là chuỗi Python **không phải raw-string**, nên `\'` trong JS bị Python biến
+  thành `'` → lệch nháy, **chết cả khối `<script>`** (kể cả hàm `pickDate` của nút gợi ý cũ). Trong JS sinh HTML phải
+  dùng `&#39;`. `test_ui_calendar.py` render template và kiểm tra parity dấu nháy đơn từng dòng JS để chặn hồi quy này.
 
 ---
 
@@ -186,6 +205,14 @@ ngược lại → ghi giá trị AI với `is_verified=0`.
   * Ô còn sai duy nhất: `CBP0005` ô#9. Đây **không phải lỗi nhận dạng nét** mà là lỗi **định vị**: `_blue_ink_row_runs` cắt mất chữ số `2` đầu ngày (ảnh cắt chỉ còn `4 18 / 2024`), nên `24/08` chỉ còn là phương án `confusable` trong gợi ý. Prior chuỗi buổi (DP) từng đẩy được ô này lên đúng (10/10) nhưng **đã bị người dùng chối** vì vi phạm bất biến "`confusable` không bao giờ tự điền" (mục 5).
 * Chi phí thật trên CPU: init engine ~18 s, **quét 1 file Kiểu A ~60–70 s**, Kiểu B viết tay **một lớp 156 s → hai lớp 403 s**/file (`CBP0005` 9 trang), Kiểu B ngày in đen **~190 s**/file (`CBP0007` 10 trang, đo trực tiếp qua `POST /scan/`, tính cả nạp model). Một kỳ ~500 file ⇒ **10–18 giờ**, phải quét nền/từng phần.
 * Kiem chứng end‑to‑end qua HTTP that (20/10/2026, server `--noreload` chay bang engine moi): `POST /scan/` file `CBP0007` → DB **12 dòng**, **12/12 ngày đúng ground truth**, **0 dòng `is_verified=1`**, diem thap nhat **0.9473**. Sau do `POST /save-all/` xac nhan tay o#5 (`05/09/2024`) roi **quet lai**: van giu `05/09/2024` + `is_verified=1` (bất biến chống mất dữ liệu đã duyệt vẫn đúng với đường đọc chữ in mới).
+* Kiem chứng **lịch nhập tay** (20/10/2026) bang trinh duyet that (Chrome + CDP, khong phai render tinh):
+  * `test_ui_calendar.py` → 9/9 PASS (markup + parity dau nhay JS).
+  * Dong 🔴 gia lap (xoa ngay o dong #21): lich mo **dung thang cua ky** (`Tháng 10 2026`), khong co ngay chon san;
+    bam *Áp dụng* khi chua chon ngay → bao *“Bạn chưa chọn ngày trên lịch.”* va khong dong; `Esc` va click ngoai deu dong lich.
+  * Dong #54: doi thang ◀ → chon ngay **12** → `Giờ BĐ 07:30`, `Giờ KT 09:15` → *Áp dụng* → o Ngay `12/08/2024`,
+    hai o gio duyen gia tri, ☑️ Xac nhon duoc tick, nhan Trang thai doi mau, **diem AI giu nguyen 0.9473**.
+    Bam *Lưu toàn bộ* → `POST /save-all/` → SQLite: `date_str=12/08/2024`, `start_time=07:30`, `end_time=09:15`, `is_verified=1`, `ocr_confidence=0.9473`.
+    (Hai dong dung trong test da duoc **hoi dung** ve gia tri AI ban dau sau khi do.)
 
 ---
 

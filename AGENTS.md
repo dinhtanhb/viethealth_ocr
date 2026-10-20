@@ -52,8 +52,11 @@ Tài liệu này ghi lại **các quy ước và cạm bẫy thực tế** đã 
 * Chuỗi chỉ toàn số `1` (`'1 1'`, `'1111'`) = **viền bảng đứng** bị OCR thành chữ số → loại outright, không sinh phương án.
 * Ngưỡng 🟢 cũng được lặp lại trong inline template của `web_app.py` — **sửa ở đây phải sửa ở đó**.
 
-### 3.5. Django redirect & ký tự `&`
+### 3.5. Django redirect, ký tự `&` và JS nhúng trong `HTML_TEMPLATE`
 * Message redirect chứa query string: **luôn dùng `urllib.parse.urlencode({...})`**. Ký tự `&` thô sẽ làm cắt thông báo từ điểm có `&` (lỗi đã gặp với dòng "AI tự đọc & điền Ngày").
+* `HTML_TEMPLATE` là chuỗi Python **không phải raw-string**, nên mọi backslash trong JS/CSS bên trong nó bị Python xử lý trước. Viết `\'` trong một chuỗi JS sẽ thành `'` → **lệch dấu nháy, chết cả khối `<script>`** (im lặng: trang vẫn tải 200, chỉ có mọi hàm JS là `undefined`). Muốn có `\'` trong JS phải viết `\\'`; an toàn hơn trong HTML attribute là dùng `&#39;`.
+* Sau khi sửa JS trong template, **chạy `python -X utf8 test_ui_calendar.py`** (render template + kiểm parity dấu nháy từng dòng JS) rồi **mở trang thật bằng browser** — render thành công không có nghĩa là JS chạy được.
+* **Nhập tay bằng lịch 📅** (dòng AI không đọc được ngày): `openCal`/`calRender`/`calApply` trong `HTML_TEMPLATE` — lịch tháng tiếng Việt + ô `Giờ bắt đầu`/`Giờ kết thúc`, tự nhảy đúng tháng của `period`. Chỉ ghi `date_str`/`start_time`/`end_time` và tick ☑️ Xác nhận; **không được sửa `ocr_confidence`** (không gán điểm giả cho ngày con người nhập).
 
 ### 3.6. Công cụ sửa file
 * Trong `web_app.py`, thao tác replace trên các dòng chứa cú pháp template Django `{% ... %}` / `{{ ... }}` có thể **thất bại dù chuỗi khớp hệt**. Workaround: neo vào chuỗi con ASCII ngắn, hoặc viết lại toàn bộ file (file nhỏ).
