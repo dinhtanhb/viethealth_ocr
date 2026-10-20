@@ -15,6 +15,25 @@
         "25": "26/08/2026",
         "26": "24/08/2026"
       }
+    },
+    "D:\\VietHealth\\INC3b - Documents\\6. Bao cao\\7. Ho so can thiep\\2. Ho so theo ky\\2024.09.15\\GDDB\\CBP0005 Trần Hoàng Nam.pdf": {
+      "note": "Kieu B - phieu can thiep tung buoi. 10 ngay do NGUOI doc truc tiep tren anh cat, luu ben trong repo: benchmarks/evidence/CBP0005_kieu_b_truth.jpg (10 dai muc den, nhan '#box -> ngay') va CBP0005_kieu_b_p09_full_strip.png (ca hai slot trang 9: 'Buoi 9 ngay 24/8/2024' va 'Buoi 10 ngay 27/8/2024'). Key = box_number thu tu theo trang/dai muc den, khop _debug_p6h.txt ngay 20/10/2026. Lu y: anh cat o#9 cat mat net '2' dau nen chi co strip trang 9 la doc du 24/8.",
+      "resolve": {
+        "base": "D:\\VietHealth\\INC3b - Documents\\6. Bao cao\\7. Ho so can thiep\\2. Ho so theo ky\\2024.09.15\\GDDB",
+        "contains": "CBP0005"
+      },
+      "sessions": {
+        "1": "05/08/2024",
+        "2": "07/08/2024",
+        "3": "10/08/2024",
+        "4": "12/08/2024",
+        "5": "15/08/2024",
+        "6": "17/08/2024",
+        "7": "20/08/2024",
+        "8": "22/08/2024",
+        "9": "24/08/2024",
+        "10": "27/08/2024"
+      }
     }
   }
 }

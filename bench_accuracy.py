@@ -28,8 +28,29 @@ def load_ground_truth(only: str = ""):
         data = json.load(f)
     docs = data.get("docs", {})
     if only:
-        docs = {k: v for k, v in docs.items() if os.path.normcase(k) == os.path.normcase(only)}
+        # Cho phép lọc bằng đường dẫn đầy đủ HOẶC một đoạn tên không dấu (ASCII),
+        # vì truyền tiếng Việt có dấu qua PowerShell nhiều lúc bị sai mã.
+        docs = {k: v for k, v in docs.items()
+                if os.path.normcase(k) == os.path.normcase(only) or only.lower() in k.lower()}
     return docs
+
+
+def resolve_path(pdf_path: str, info: dict) -> str:
+    """
+    Đường dẫn ghi trong JSON có thể khác chuẩn hóa NFC/NFD so với tên thật trên đĩa
+    (tên tiếng Việt có dấu). Cho phép tra lại bằng os.walk qua mục "resolve".
+    """
+    if os.path.exists(pdf_path):
+        return pdf_path
+    spec = info.get("resolve") or {}
+    base, needle = spec.get("base", ""), spec.get("contains", "")
+    if not (base and needle) or not os.path.isdir(base):
+        return pdf_path
+    for dp, _, files in os.walk(base):
+        for f in sorted(files):
+            if f.lower().endswith(".pdf") and needle in f:
+                return os.path.join(dp, f)
+    return pdf_path
 
 
 def evaluate(engine: PDFGridOCREngine, pdf_path: str, truth: dict):
@@ -40,6 +61,16 @@ def evaluate(engine: PDFGridOCREngine, pdf_path: str, truth: dict):
 
     stats = Counter()
     details = []
+    # Row AI phát ra mà ô đó không có ngày = NGÀY GIẢ, phải đếm riêng
+    for s in sessions:
+        if str(s.get("box_number")) in {str(k) for k in truth}:
+            continue
+        if s.get("date"):
+            stats["extra"] += 1
+        else:
+            stats["review"] += 1
+        details.append((s.get("box_number"), "(không có ngày nào)", s.get("date") or "",
+                        "-", f"{float(s.get('confidence') or 0):.2f}"))
     for box, want in sorted(truth.items(), key=lambda kv: int(kv[0])):
         s = by_box.get(str(box))
         if s is None:
@@ -81,7 +112,8 @@ def main():
     engine = PDFGridOCREngine()
     grand = Counter()
     print("=" * 88)
-    for pdf_path, info in docs.items():
+    for pdf_key, info in docs.items():
+        pdf_path = resolve_path(pdf_key, info)
         truth = info.get("sessions", {})
         print(f"📄 {os.path.basename(pdf_path)}  ({len(truth)} ô có ground truth)")
         if not os.path.exists(pdf_path):
@@ -91,6 +123,13 @@ def main():
         stats, details = evaluate(engine, pdf_path, truth)
         grand.update(stats)
         for box, want, got, top, conf in details:
+            if want == "(không có ngày nào)":
+                # Hai trường hợp khác nhau hẳn: điền ngày GIẢ vs chỉ để trống + gợi ý
+                if got:
+                    print(f"   🚫 Ô#{box:>3}  KHÔNG PHẢI Ô NGÀY  AI={got:<12}  conf={conf}  <-- ngày GIẢ")
+                else:
+                    print(f"   ⚪ Ô#{box:>3}  không điền (chỉ gợi ý)  conf={conf}")
+                continue
             mark = "✅" if got == want else ("🟡" if top == "DUNG" else "❌")
             print(f"   {mark} Ô#{box:>3}  người={want}  AI={got:<12}  conf={conf:<5} trong_gợi_ý={top}")
         print(f"   → EXACT {stats['exact']}/{stats['total']} ({pct(stats['exact'], stats['total'])}%)"
@@ -106,6 +145,8 @@ def main():
     print(f"  TOP-N  - đáp án đúng nằm trong gợi ý:     {grand['top']:>3}/{t} = {pct(grand['top'], t)}%")
     print(f"  NGÀY  - đọc đúng riêng phần ngày:         {grand['day']:>3}/{t} = {pct(grand['day'], t)}%")
     print(f"  NGUY HIỂM - điền SAI mà điểm >= {engine.CONFIDENCE_MED}: {grand['dangerous']} ô")
+    print(f"  GIẢ  - ô AI tự điền ngày trong khi phiếu không ghi:  {grand['extra']} ô")
+    print(f"  (thêm {grand['review']} row không điền ngày, chỉ gợi ý để người dùng soát)")
     print("\n  Lưu ý: EXACT là giới hạn của OCR với chữ viết tay này; TOP-N mới là thứ")
     print("  quyết định số lần người dùng phải tự gõ. Không có ô nào được đánh dấu")
     print("  'đã xác nhận' cho tới khi người dùng tích chọn trên UI.")
