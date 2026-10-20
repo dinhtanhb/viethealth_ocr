@@ -25,7 +25,7 @@ PyMuPDF render 300 DPI ──► analyze_page_geometry() ──► PHÂN NHÁNH 
                    ▼
      Tách mực xanh → OCR từng vùng → clean_and_parse_datetime()
                    ▼
-     Danh sách session {box_number, date, start_time, end_time, raw_ocr, confidence, snippet_path}
+     Danh sách session {box_number, date, candidates, start_time, end_time, raw_ocr, confidence, snippet_path}
                    ▼
      local_db.save_document_and_sessions()  →  SQLite
                    ▼
@@ -75,16 +75,25 @@ right_limit = gx + int(gw * 0.35)
 
 ## 4. Chuẩn hóa & phục hồi ngày hỏng
 
-`clean_and_parse_datetime(raw_text, default_year, default_month=None)` chạy theo thứ tự:
+`clean_and_parse_datetime(raw_text, default_year, dets)` tra ve `{date, candidates, confidence, warning, raw_ocr}`.
+Chi co **duong dan khong dan**: moi cap (Ngay, Thang) deu phai doc duoc tu anh hoac tach ra tu cum so dinh.
 
-1. **Sửa lỗi mặt chữ** qua `CONFUSION_MAP`: `O→0`, `l/I→1`, `S→5`, `B→8`, …
-2. **Trích năm**, kể cả khi OCR cắt mất đầu (`026`, `206`, `26`, `24`, `25`).
-3. **Khớp separator**, thử **đảo ngày ↔ tháng** nếu vô lý.
-4. **Gom token** số học rời rạc thành cụm ngày.
-5. **Cứu tháng bị cụt** (VD `5/81 4` → `05/08`).
-6. **Suy tháng theo kỳ thư mục** (`parse_period_prior("2026.10.20")` → năm 2026, tháng 10) — **có gắn `warning`**.
+Thu tu bang chung (`basis`), gan da 3 phuong an tra ve cho UI bam chon:
 
-`run_ocr_on_cell()` trả `(text, avg_confidence)` với `allowlist='0123456789/.-:'`.
+| `basis` | Cach sinh | Tu dong dien? |
+| :--- | :--- | :--- |
+| `separator` | 2 cum so co dau `/ . -` chen giua | ✅ Co |
+| `adjacent` | 2 cum so dung canh nhau tren cung dong OCR | ✅ Co |
+| `split` | Tach mot cum so dinh (VD `3007` -> `30/07`) | ⚠️ Co, nhung bi ha diem (`guessed`) |
+| `prefix` | Lay cho dau cua cum dai (VD `10 8206` -> `10/08`) | ⚠️ Co, `guessed` |
+| `confusable` | Doi 1 chu so nham lan (1↔7, 8↔9, 0↔2, 3↔5/8, 6↔0/5) | ❌ **KHONG BAO GIO** - xep cuoi danh sach, chi de nguoi dung bam |
+
+Da bi go bo (nguoc dong da gay ra loi "0/10 ngay dung"): `CONFUSION_MAP` sira mat chu, ghep bia
+"2 cum so bat ky", va **muon Thang tu ten thu muc ky** (`2026.10.20` -> thang 10). Thu muc ky gio chi
+co the cung **Nam** khi anh khong doc ra nam, va luon gan `warning`.
+
+`run_ocr_on_cell()` tra `(raw_text, dets)` voi `dets = [{x, y, text, score}]` lay tu `PaddleOCR.predict()`
+(sap theo truc x). Diem tin cay = trung binh diem cua **rieng cac cum so**, khong tính chữ ký/tên in sẵn.
 
 ---
 
@@ -92,12 +101,11 @@ right_limit = gx + int(gw * 0.35)
 
 | Hằng số | Giá trị | Ý nghĩa |
 | :--- | :--- | :--- |
-| `CONFIDENCE_HIGH` | **0.45** | Ngưỡng 🟢 "AI tự đọc chắc chắn" |
-| `CONFIDENCE_MED` | **0.30** | Ngưỡng 🟡 "Tin cậy thấp – cần soát" |
-| `MIN_DATE_CONFIDENCE` | **0.15** | Dưới mức này coi như ô trống |
+| `CONFIDENCE_HIGH` | **0.60** | Ngưỡng 🟢 "AI tự đọc chắc chắn" |
+| `CONFIDENCE_MED` | **0.40** | Ngưỡng 🟡 "Tin cậy thấp – cần soát" |
 
-* Chữ viết tay **hiếm khi vượt 0.55** → nâng `CONFIDENCE_HIGH` lên 0.55+ sẽ gần như không còn dòng 🟢 (đã từng sai như vậy).
-* **Bất biến quan trọng:** ngày phải *suy đoán* (có `warning`) luôn bị hạ xuống `CONFIDENCE_MED - 0.01` để **buộc** người dùng soát:
+* Diem cua PaddleOCR la xac suat that (0..1) tren cuong so, cao hon thang EasyOCR cu (0.45/0.30/0.15).
+* **Bất biến quan trọng:** ngày phải *tách/đoán* (`guessed`) luôn bị hạ xuống `CONFIDENCE_MED - 0.01` để **buộc** người dùng soát:
 
 ```python
 if best["date"] and best["warning"]:
@@ -142,11 +150,17 @@ ngược lại → ghi giá trị AI với `is_verified=0`.
 
 ---
 
-## 7. Cờ phủ sóng & kiểm chứng
+## 7. Đo lường & kiểm chứng (bài học độ phủ ≠ độ chính xác)
 
-* `bench_auto_read.py "<dir|file>" [max]` — in tỷ lệ tự đọc từng file + tổng, có cờ ✅ khi **> 90%**.
-* Kết quả tham chiếu trên **dữ liệu thật** (4 file Kiểu B kỳ `2024.09.15`): **41/45 = 91.1%**.
-* `web_app.py scan_view` cũng in `%` ngay trên banner; nếu `< 90%` sẽ kèm cảnh báo yêu cầu soát dòng vàng/đỏ.
+* `bench_accuracy.py` — so kết quả AI với **ground truth do người đọc tay** (`benchmarks/ground_truth.json`), in tách bạch:
+  * `EXACT` = % ô AI **tự điền đúng tuyệt đối** (đây mới là thước đo yêu cầu "AI tự đọc");
+  * `TOP-N` = % ô có đáp án đúng **nằm trong gợi ý** (người dùng bấm chọn);
+  * `NGÀY` = đọc đúng riêng phần ngày; `NGUY HIỂM` = điền SAI mà điểm ≥ `CONFIDENCE_MED`.
+* ⚠️ Con số **`41/45 = 91.1%`** từng ghi ở đây là **độ phủ** do `bench_auto_read.py` (đã xóa) tính ra: nó đếm cả ô AI điền **sai**, nên thực tế 0 ngày đúng mà vẫn báo 91%. Không dùng lại kiểu đo đó.
+* Số liệu hiện tại, **trên 1 file** `Test_doc_PDF_2.pdf` (10 ô viết tay, kỳ `2026.10.20`, Kiểu A):
+  **EXACT 6/10 = 60%** | **TOP-N 10/10 = 100%** | NGÀY 9/10 | NGUY HIỂM 2 ô.
+  Chưa phải kết luận tổng thể — cần thêm ground truth cho nhiều file Kiểu A/Kiểu B khác.
+* Chi phí thật trên CPU: init engine ~18 s, **quét 1 file Kiểu A ~60–70 s** (`_debug_perf` 19/10/2026). Một kỳ ~500 file ⇒ nhiều giờ, phải quét nền/từng phần.
 
 ---
 

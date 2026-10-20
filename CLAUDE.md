@@ -15,7 +15,7 @@ AI tự đọc **> 90%** ngày viết tay trên PDF chấm công can thiệp →
 ```powershell
 # PowerShell không có '&&' -> dùng ';'
 .\venv\Scripts\python.exe web_app.py runserver 127.0.0.1:8031 --noreload   # UI: http://127.0.0.1:8031/
-.\venv\Scripts\python.exe -X utf8 bench_auto_read.py "<dir|file PDF>" [max]  # do ty le AI tu doc
+.\venv\Scripts\python.exe -X utf8 bench_accuracy.py              # do CHINH XAC: EXACT vs TOP-N (ground truth)
 .\venv\Scripts\python.exe -X utf8 -m py_compile web_app.py core_engine\local_db.py
 ```
 
@@ -30,7 +30,7 @@ AI tự đọc **> 90%** ngày viết tay trên PDF chấm công can thiệp →
 3. **Kiểu B phải giới hạn vùng đọc ở 35% chiều rộng bên trái**, nếu không chữ ký bị đọc nhầm thành ngày → sinh "buổi ảo".
 4. **Mọi PDF thật đều là scan thuần, không text layer.** Đường dẫn tiếng Việt phải lấy qua `os.walk` (không gõ tay — lệch Unicode NFC/NFD).
 5. **Message redirect phải dùng `urllib.parse.urlencode({...})`.** Ký tự `&` thô làm cắt cụt thông báo.
-6. **Ngưỡng tin cậy:** `CONFIDENCE_HIGH=0.45`, `CONFIDENCE_MED=0.30`, `MIN_DATE_CONFIDENCE=0.15`. Không nâng `CONFIDENCE_HIGH` (chữ viết tay hiếm khi > 0.55). Ngày suy đoán phải bị hạ dưới `CONFIDENCE_MED` để buộc soát lại. Ngưỡng 🟢 còn bị lặp trong `HTML_TEMPLATE` của `web_app.py` — sửa đồng bộ cả hai.
+6. **Ngưỡng tin cậy:** `CONFIDENCE_HIGH=0.60`, `CONFIDENCE_MED=0.40` (thang diem THAT cua PaddleOCR tren cum so; khong con `MIN_DATE_CONFIDENCE` cua EasyOCR). Phuong an `guessed` (tach cum so dinh / nho nham net chu so) bi ha duoi `CONFIDENCE_MED` va **khong bao gio duoc tu dong dien**. Do bang `bench_accuracy.py` voi ground truth do nguoi doc - khong do do phu. Ngưỡng 🟢 còn bị lặp trong `HTML_TEMPLATE` của `web_app.py` — sửa đồng bộ cả hai.
 
 ## Kiến trúc nhanh
 
@@ -48,7 +48,7 @@ AI tự đọc **> 90%** ngày viết tay trên PDF chấm công can thiệp →
 
 Không báo hoàn thành nếu thiếu bằng chứng thật:
 
-* OCR thay đổi → chạy `bench_auto_read.py` trên **dữ liệu thật**, báo số cụ thể (tử số/mẫu số, %).
+* OCR thay đổi → chạy `bench_accuracy.py` trên **dữ liệu thật**, báo số cụ thể (tử số/mẫu số, %). Ưu tiên **EXACT** (tự điền đúng); TOP-N (đúng trong gợi ý) là chỉ số phụ, không được thay EXACT để báo "đạt > 90%".
 * UI/luồng thay đổi → gọi HTTP thật vào `/scan/` + `/save-all/` và **verify lại bằng SQL**, hoặc render trình duyệt kèm ảnh chụp.
 * `py_compile` sạch lỗi.
 * **Không rút gọn yêu cầu** để vượt mốc 90% dễ hơn — đó là yêu cầu cứng của đề bài.
