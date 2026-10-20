@@ -1,4 +1,5 @@
 import os
+import json
 import sqlite3
 from datetime import datetime
 from typing import List, Dict, Optional
@@ -52,10 +53,13 @@ class LocalOCRDatabase:
                     FOREIGN KEY(doc_id) REFERENCES pdf_documents(id) ON DELETE CASCADE
                 )
             """)
-            # Migration an toàn: thêm cột confidence cho bản ghi cũ (SQLite không có IF NOT EXISTS cho ALTER)
+            # Migration an toàn: thêm cột cho bản ghi cũ (SQLite không có IF NOT EXISTS cho ALTER)
             columns = [row["name"] for row in conn.execute("PRAGMA table_info(intervention_sessions)").fetchall()]
             if "ocr_confidence" not in columns:
                 conn.execute("ALTER TABLE intervention_sessions ADD COLUMN ocr_confidence REAL DEFAULT 0")
+            if "date_candidates" not in columns:
+                # JSON danh sách tối đa 3 phương án Ngày AI đọc được để người dùng bấm chọn
+                conn.execute("ALTER TABLE intervention_sessions ADD COLUMN date_candidates TEXT DEFAULT '[]'")
             conn.commit()
 
     def save_document_and_sessions(self, meta: Dict, sessions: List[Dict]) -> int:
@@ -131,8 +135,8 @@ class LocalOCRDatabase:
                     INSERT INTO intervention_sessions (
                         doc_id, session_order, box_number, date_str,
                         start_time, end_time, raw_ocr, snippet_path, is_verified,
-                        ocr_confidence
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        ocr_confidence, date_candidates
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, (
                     doc_id,
                     idx,
@@ -143,7 +147,8 @@ class LocalOCRDatabase:
                     s.get("raw_ocr") or "",
                     s.get("snippet_path") or "",
                     verified_val,
-                    float(s.get("confidence") or 0.0)
+                    float(s.get("confidence") or 0.0),
+                    json.dumps(s.get("candidates") or [], ensure_ascii=False)
                 ))
             conn.commit()
             return doc_id
@@ -161,6 +166,7 @@ class LocalOCRDatabase:
                 s.snippet_path,
                 s.is_verified,
                 s.ocr_confidence,
+                s.date_candidates,
                 d.id AS doc_id,
                 d.file_path,
                 d.period,
@@ -181,7 +187,16 @@ class LocalOCRDatabase:
 
         with self._get_conn() as conn:
             rows = conn.execute(query, params).fetchall()
-            return [dict(r) for r in rows]
+        out = []
+        for r in rows:
+            d = dict(r)
+            # JSON -> list phương án Ngày để template render nút bấm chọn
+            try:
+                d["candidates"] = json.loads(d.get("date_candidates") or "[]")
+            except (ValueError, TypeError):
+                d["candidates"] = []
+            out.append(d)
+        return out
 
     def update_session(self, session_id: int, date_str: str, start_time: str, end_time: str,
                        verified: Optional[bool] = None):

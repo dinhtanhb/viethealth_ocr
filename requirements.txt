@@ -12,7 +12,12 @@ Pillow>=10.0.0
 
 numpy>=1.24.0,<2.0.0
 
-easyocr>=1.7.1
+# Engine OCR chinh: PaddleOCR CPU (do chinh xac tren chu viet tay cao hon EasyOCR)
+# Chay offline sau khi chay setup_offline_models.py mot lan de tai trong so.
+
+paddlepaddle>=3.0.0
+
+paddleocr>=3.0.0
 
 
 

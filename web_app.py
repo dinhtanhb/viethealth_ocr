@@ -42,7 +42,7 @@ def get_ocr_engine():
     global ocr_engine
     if ocr_engine is None:
         ocr_engine = PDFGridOCREngine(
-            models_dir=os.path.join(BASE_DIR, "models_storage", "easyocr"),
+            models_dir=os.path.join(BASE_DIR, "models_storage", "paddlex"),
             snippets_dir=os.path.join(BASE_DIR, "media_snippets")
         )
     return ocr_engine
@@ -82,6 +82,13 @@ HTML_TEMPLATE = """
         .left { text-align: left !important; }
         .conf-pill { font-size: 11.5px; color: #1f4e78; font-weight: 700; }
         .chk-confirm { width: 17px; height: 17px; cursor: pointer; }
+        .cand-box { margin-top: 4px; display: flex; flex-direction: column; gap: 3px; align-items: center; }
+        .cand-box small { color: #777; font-size: 10.5px; }
+        .cand-btn { padding: 3px 7px; font-size: 11.5px; border: 1px solid #1f4e78; background: #eef4fa;
+                    color: #163a59; border-radius: 4px; cursor: pointer; font-weight: 600; }
+        .cand-btn:hover { background: #1f4e78; color: #fff; }
+        .cand-alt { border-style: dashed; background: #fff9e6; color: #856404; border-color: #b8860b; }
+        .cand-alt:hover { background: #b8860b; color: #fff; }
     </style>
 </head>
 <body>
@@ -98,7 +105,8 @@ HTML_TEMPLATE = """
             <button type="submit" class="btn btn-primary">🔍 Quét AI OCR (PDF / Thư mục)</button>
         </form>
         <div style="margin-top:6px; font-size:12.5px; color:#555;">
-            💡 <b>Mẹo:</b> AI tự đọc & điền Ngày vào từng dòng. Rê chuột vào <b>Ảnh cắt chữ viết tay</b> để phóng to 2.5x.
+            💡 <b>Mẹo:</b> AI tự đọc & điền Ngày vào từng dòng; nếu đọc ra nhiều phương án, bạn <b>bấm vào phương án đúng</b> bên dưới ô Ngày.
+            Rê chuột vào <b>Ảnh cắt chữ viết tay</b> để phóng to 2.5x.
             Dòng <span class="badge-warn">🟡</span> / <span class="badge-bad">🔴</span> cần bạn kiểm tra kỹ.
             Tích ☑️ <b>Xác nhận</b> (hoặc sửa Ngày/Giờ) rồi nhấn <b>Lưu toàn bộ thay đổi</b> trước khi xuất Excel.
         </div>
@@ -134,7 +142,7 @@ HTML_TEMPLATE = """
             </thead>
             <tbody>
                 {% for r in records %}
-                <tr class="{% if not r.date or r.ocr_confidence < 0.3 %}row-warn{% endif %}">
+                <tr class="{% if not r.date or r.ocr_confidence < 0.4 %}row-warn{% endif %}">
                     <td>{{ forloop.counter }}</td>
                     <td><b>{{ r.period }}</b><br><span style="color:#555">{{ r.group }}</span></td>
                     <td class="left"><b>[{{ r.staff_id }}]</b><br>{{ r.staff_name }}</td>
@@ -147,7 +155,18 @@ HTML_TEMPLATE = """
                     </td>
                     <td>
                         <input type="hidden" name="session_id" value="{{ r.session_id }}" />
-                        <input type="text" name="date_{{ r.session_id }}" value="{{ r.date }}" class="inp-date" placeholder="DD/MM/YYYY" />
+                        <input type="text" name="date_{{ r.session_id }}" id="date_{{ r.session_id }}"
+                               value="{{ r.date }}" class="inp-date" placeholder="DD/MM/YYYY" />
+                        {% if r.candidates and r.candidates|length > 1 %}
+                        <div class="cand-box">
+                            <small>AI đọc ra {{ r.candidates|length }} phương án (bấm để chọn):</small>
+                            {% for c in r.candidates %}
+                            <button type="button" class="cand-btn{% if c.basis == 'confusable' %} cand-alt{% endif %}"
+                                    title="{% if c.basis == 'confusable' %}⚠️ Phương án dự phòng: khả năng OCR nhầm nét chữ số (1/7, 8/9, 2/0) - chỉ bấm khi ảnh cắt rõ là số đó{% else %}Bấm để chọn Ngày này (đọc trực tiếp từ ảnh){% endif %}"
+                                    onclick="pickDate('{{ r.session_id }}','{{ c.date }}')">{{ c.date }}{% if c.basis == 'confusable' %} <sup>?</sup>{% endif %}</button>
+                            {% endfor %}
+                        </div>
+                        {% endif %}
                     </td>
                     <td>
                         <input type="text" name="start_{{ r.session_id }}" value="{{ r.start_time }}" class="inp-time" placeholder="08:00" />
@@ -162,8 +181,10 @@ HTML_TEMPLATE = """
                     <td>
                         {% if not r.date %}
                             <span class="badge-bad">🔴 Chưa đọc được – nhập tay</span>
-                        {% elif r.ocr_confidence >= 0.45 %}
+                        {% elif r.ocr_confidence >= 0.60 %}
                             <span class="badge-ok">🟢 AI tự đọc chắc chắn</span>
+                        {% elif r.candidates and r.candidates|length > 1 %}
+                            <span class="badge-warn">🟡 Nhiều phương án – bấm chọn</span>
                         {% else %}
                             <span class="badge-warn">🟡 Tin cậy thấp – cần soát</span>
                         {% endif %}
@@ -184,6 +205,17 @@ HTML_TEMPLATE = """
         </table>
     </form>
 </div>
+<script>
+function pickDate(sid, val) {
+    var el = document.getElementById('date_' + sid);
+    if (!el) return;
+    el.value = val;
+    el.style.background = '#dff0d8';
+    // Bấm chọn = người dùng đã đối chiếu => tick sẵn ô Xác nhận
+    var chk = document.querySelector('input[name="confirm_' + sid + '"]');
+    if (chk) chk.checked = true;
+}
+</script>
 </body>
 </html>
 """
@@ -225,6 +257,7 @@ def scan_view(request):
         scanned_count = 0
         total_sessions = 0
         total_with_date = 0
+        total_multi = 0
         for pdf_file in pdf_files:
             meta = VietHealthPathParser.parse(pdf_file)
             prefix = f"{meta.get('child_id') or 'DOC'}_{scanned_count + 1}"
@@ -233,12 +266,16 @@ def scan_view(request):
             scanned_count += 1
             total_sessions += len(sessions)
             total_with_date += sum(1 for s in sessions if s.get("date"))
+            total_multi += sum(1 for s in sessions if len(s.get("candidates") or []) > 1)
 
         if total_sessions:
             pct = round(total_with_date * 100.0 / total_sessions)
-            coverage = f" | 🤖 AI tự đọc & điền Ngày: {total_with_date}/{total_sessions} ô ({pct}%)"
-            if pct < 90:
-                coverage += " ⚠️ Dưới 90%, vui lòng soát các dòng vàng/đỏ"
+            # Day ro: day la DO PHU (so o AI dien duoc), KHONG phai do CHINH XAC.
+            coverage = (f" | 🤖 AI điền được Ngày ở {total_with_date}/{total_sessions} ô ({pct}% độ phủ, "
+                        f"chưa phải độ chính xác)")
+            if total_multi:
+                coverage += f" | 🟡 {total_multi} ô AI đọc ra nhiều phương án - bạn bấm chọn 1 cái"
+            coverage += " | ⚠️ Bắt buộc đối chiếu ảnh cắt trước khi tick Xác nhận"
         else:
             coverage = " | ⚠️ Không phát hiện ô chữ viết tay nào"
 

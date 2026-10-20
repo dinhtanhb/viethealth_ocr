@@ -11,49 +11,82 @@ try:
 except ImportError:
     import fitz
 
-import easyocr
+# PaddleOCR duoc import tre (lazy) ben trong __init__ SAU khi da tro thu muc model
+# ve models_storage/paddlex de chay 100% offline va cam theo thu muc project.
 
 
 class PDFGridOCREngine:
     """
     Bộ lõi xử lý trang cuối PDF Bảng Chấm Công (Offline 100%):
     - Tự động bắt khung bảng 30 ô (5 hàng x 6 cột)
-    - Tọa độ ROI chuẩn xác (y: 19% -> 41%) lấy trọn dòng Ngày, loại bỏ 100% chữ ký Phụ huynh bên dưới
-    - Lọc tách riêng mực bút xanh sang Grayscale mềm mại cho EasyOCR
-    - Đa lớp tiền xử lý + khửi sai lệch OCR (nhiều ROI, nhiều ngưỡng) để đạt >90% số Ngày đọc tự động
-    - Mượn Năm/Tháng từ tên thư mục Kỳ làm "prior" cứu các ô OCR thiếu nét
+    - ROI dòng Ngày lấy đúng band mực viết tay (y 10%-37% của ô) - đo bằng row-projection
+    - Lọc tách riêng mực bút xanh sang Grayscale mềm mại cho OCR
+    - Engine: PaddleOCR PP-OCRv6 (CPU, offline) - do bang chinh xac hon EasyOCR tren chu viet tay nay
+    - KHONG bao gio bia ngay: chi chap nhan cap (Ngay, Thang) hop le thu duoc tu chuoi OCR;
+      moi phuong an khac deu tra ve dang "goi y" de nguoi dung bam chon.
     """
 
-    # Các cặp ký tự EasyOCR hay nhầm lẫn với chữ số trong bối cảnh chỉ cho phép số
-    CONFUSION_MAP = {
-        "O": "0", "o": "0", "Q": "0", "D": "0", "q": "0",
-        "I": "1", "l": "1", "i": "1", "|": "1", "J": "1",
-        "Z": "2", "z": "2", "r": "2",
-        "S": "5", "s": "5",
-        "B": "8", "b": "6",
-        "g": "9", "C": "G",
-        "t": "+",
+    # Ngưỡng phân loại độ tin cậy trên UI
+    CONFIDENCE_HIGH = 0.60   # PaddleOCR cho điểm thật (0..1), khong cong gop nhu EasyOCR cu
+    CONFIDENCE_MED = 0.40    # Thấp hơn mức này: UI bắt buộc người dùng soát
+
+    # Band tọa độ tính theo tỷ lệ chiều cao/chiều rộng của MỘT Ô trong lưới 30 ô.
+    # Do thuc te tren Test_doc_PDF_2.pdf: chu viet tay ngay nam o 0.10-0.35 cua o,
+    # chu ky xanh bat dau tu ~0.46 (tuyen doi khong duoc de no nhiem vao ROI).
+    DATE_BAND_Y = (0.10, 0.37)
+    DATE_BAND_Y_ALT = (0.07, 0.42)   # Lưu phái cho ô viết lệch dòng
+    DATE_BAND_X = (0.02, 0.98)
+    SNIPPET_BAND_Y = (0.05, 0.44)    # Ảnh cắt cho người dùng đối chiếu
+
+    # Năm/Tháng phải là số hợp lệ; ứng viên vi phạm bị loại outright
+    MAX_DAY = 31
+    MAX_MONTH = 12
+
+    # Tran kich thuoc anh dua vao OCR. PaddleOCR tu no thu nho trong nuoc
+    # (limit_side_len ~960), nen minh thu nho truoc thi buoc detect chay nhanh
+    # hon rat nhieu ma khong mat net: bang scan 12 MB o 300 DPI co the sinh
+    # vung 2000x1200 px -> mat ~55s/o (thay vi ~7s/o nhu bang thuong).
+    MAX_OCR_SIDE = 1100
+
+    # Cac so viet tay de nham lan nhau (buoc thu nhat la pair DA QUANSAT tren
+    # Test_doc_PDF_2.pdf: '1'<->'7' (o 1, 7), '8'<->'9' (o 19), '2'<->'0' (o 25)).
+    # Thu tu trong chuoi QUYET DINH thuong uu tien: chi dung de sap xep goi y,
+    # khong dung de tu dong dien vao o.
+    CONFUSABLE_DIGITS = {
+        "0": "26",
+        "1": "7",
+        "2": "07",
+        "3": "58",
+        "4": "",
+        "5": "38",
+        "6": "05",
+        "7": "12",
+        "8": "936",
+        "9": "8",
     }
 
-    CONFIDENCE_HIGH = 0.45   # Ngưỡng tin tưởng cao (tự điền, ít cần soát) - chữ viết tay khó đạt 0.55+
-    CONFIDENCE_MED = 0.30    # Ngưỡng thấp nhất chấp nhận được
-
-    MIN_DATE_CONFIDENCE = 0.15  # Chuỗi OCR quá nhỏ/nhiễu -> coi như ô trống
-
-    def __init__(self, models_dir: str = "models_storage/easyocr", snippets_dir: str = "media_snippets"):
+    def __init__(self, models_dir: str = "models_storage/paddlex", snippets_dir: str = "media_snippets"):
         self.models_dir = models_dir
         self.snippets_dir = snippets_dir
         os.makedirs(self.models_dir, exist_ok=True)
         os.makedirs(self.snippets_dir, exist_ok=True)
 
+        # Tro model ve thu muc cua project (mac dinh ~/.paddlex) va bo kiem tra ket mang
+        os.environ.setdefault("PADDLE_PDX_CACHE_HOME", os.path.abspath(self.models_dir))
+        os.environ.setdefault("PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK", "True")
+
+        from paddleocr import PaddleOCR
+
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
-            self.reader = easyocr.Reader(
-                ['en'],
-                gpu=False,
-                model_storage_directory=self.models_dir,
-                download_enabled=True,
-                verbose=False
+            # enable_mkldnn=False: BAT BUOC tren PaddlePaddle 3.x CPU, neu khong loi
+            # "ConvertPirAttribute2RuntimeAttribute not support" khi chay buoc detect.
+            self.reader = PaddleOCR(
+                lang="en",
+                use_doc_orientation_classify=False,
+                use_doc_unwarping=False,
+                use_textline_orientation=False,
+                enable_mkldnn=False,
             )
 
     def render_last_page(self, pdf_path: str, dpi: int = 300) -> np.ndarray:
@@ -200,52 +233,73 @@ class PDFGridOCREngine:
 
         return True, padded
 
-    def _repair_confused_chars(self, raw_text: str) -> str:
-        """Sửa các ký tự chữ cái bị EasyOCR nhận nhầm thành chữ số (O->0, l->1, S->5, B->8...)."""
-        fixed_chars = []
-        for ch in raw_text:
-            if ch.isdigit() or ch in "/-:. ":
-                fixed_chars.append(ch)
-            elif ch in self.CONFUSION_MAP:
-                repl = self.CONFUSION_MAP[ch]
-                fixed_chars.append(repl if repl.isdigit() else " ")
-            else:
-                fixed_chars.append(" ")
-        return "".join(fixed_chars)
+    def _paddle_dets(self, ocr_img: np.ndarray) -> List[Dict]:
+        """
+        Chạy PaddleOCR trên 1 ảnh đã tách mực.
+        Trả về danh sách dict {x, y, text, score} đã sắp xếp trái -> phải.
+        PaddleOCR chỉ nhận ảnh 3 kênh nên phải chuyển Grayscale -> BGR.
+        """
+        img = ocr_img
+        if img.ndim == 2:
+            img = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            res = self.reader.predict(np.ascontiguousarray(img))
+
+        dets: List[Dict] = []
+        for page in res:
+            texts = list(page.get("rec_texts", []) or [])
+            scores = [float(s) for s in (page.get("rec_scores", []) or [])]
+            polys = page.get("rec_polys", None)
+            if polys is None:
+                polys = page.get("dt_polys", None)
+            for i, txt in enumerate(texts):
+                x_left, y_top = 0.0, 0.0
+                try:
+                    if polys is not None and i < len(polys):
+                        pts = np.asarray(polys[i], dtype=float)
+                        x_left, y_top = float(pts[:, 0].min()), float(pts[:, 1].min())
+                except Exception:
+                    pass
+                dets.append({
+                    "x": x_left,
+                    "y": y_top,
+                    "text": str(txt),
+                    "score": scores[i] if i < len(scores) else 0.0,
+                })
+        dets.sort(key=lambda d: d["x"])
+        return dets
+
+    def _cap_ocr_side(self, img: np.ndarray) -> np.ndarray:
+        """Thu nho anh qua lon ve MAX_OCR_SIDE (giu ty le) de buoc detect chay nhanh."""
+        h, w = img.shape[:2]
+        longest = max(h, w)
+        if longest <= self.MAX_OCR_SIDE:
+            return img
+        f = float(self.MAX_OCR_SIDE) / longest
+        return cv2.resize(img, (max(1, int(w * f)), max(1, int(h * f))),
+                          interpolation=cv2.INTER_AREA)
 
     def run_ocr_on_cell(
         self, clean_gray_img: np.ndarray, min_y_ratio: float = 0.0
-    ) -> Tuple[str, float]:
+    ) -> Tuple[str, List[Dict]]:
         """
-        Đọc chuỗi số Ngày/Tháng/Năm từ ảnh đã làm sạch.
-        Chỉ cho phép các ký tự số và dấu phân cách ngày/giờ để không bao giờ nhận nhầm thành chữ cái.
-        min_y_ratio: chỉ giữ các cụm số nằm từ tỷ lệ chiều cao này trở xuống (lọc chữ in tiêu đề phía trên).
-        Trả về (chuỗi thô, điểm trung bình confidence của EasyOCR).
+        Đọc chữ từ ảnh đã làm sạch.
+        Trả về (chuỗi thô nối theo trục X, danh sách detection kèm điểm THAT của PaddleOCR).
+        min_y_ratio: chỉ giữ các cụm số nằm từ tỷ lệ chiều cao này trở xuống.
         """
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-            dets = self.reader.readtext(
-                clean_gray_img,
-                detail=1,
-                paragraph=False,
-                allowlist='0123456789/.-:',
-                text_threshold=0.30,
-                low_text=0.20,
-                link_threshold=0.20,
-                width_ths=0.4,
-                mag_ratio=1.5
-            )
+        # Cap TRUOC khi detect de toa do dets va img_h tinh o cung mot he quy
+        clean_gray_img = self._cap_ocr_side(clean_gray_img)
+        dets = self._paddle_dets(clean_gray_img)
 
         if min_y_ratio > 0:
             img_h = clean_gray_img.shape[0]
-            dets = [d for d in dets if np.mean([pt[1] for pt in d[0]]) >= img_h * min_y_ratio]
+            dets = [d for d in dets if d["y"] >= img_h * min_y_ratio]
 
-        # Sắp xếp từ trái qua phải theo trục X
-        dets.sort(key=lambda item: item[0][0][0])
-        valid = [item for item in dets if item[2] > 0.08 and item[1].strip()]
-        raw_tokens = [item[1].strip() for item in valid]
-        avg_conf = float(np.mean([item[2] for item in valid])) if valid else 0.0
-        return " ".join(raw_tokens), avg_conf
+        dets = [d for d in dets if d["score"] > 0.08 and d["text"].strip()]
+        raw_text = " ".join(d["text"].strip() for d in dets)
+        return raw_text, dets
 
     @classmethod
     def parse_period_prior(cls, period_folder: Optional[str]) -> Tuple[Optional[int], Optional[int]]:
@@ -257,110 +311,251 @@ class PDFGridOCREngine:
             return int(m.group(1)), int(m.group(2))
         return None, None
 
+    # Dac biet 'confusable' luon xep sau moi phuong an duoc doc truc tiep tu anh
+    _BASIS_RANK = {"separator": 0, "adjacent": 1, "split": 2, "prefix": 3, "confusable": 4}
+
+    @staticmethod
+    def _is_year_token(g: str) -> bool:
+        """'2026'/'2024' là Năm in sẵn hoặc viết tay -> không bao giờ được nhầm thành Tháng."""
+        return len(g) == 4 and g.startswith("20") and 2000 <= int(g) <= 2099
+
+    @classmethod
+    def _split_merged_group(cls, g: str) -> List[Tuple[str, str]]:
+        """
+        Một cụm số DÍNH (OCR mất dấu gạch chéo) -> mọi cách cắt (dd, mm) có thể.
+        VD '3107' -> [(31,07)]; '508' -> [(5,08), (50,8)...] chỉ giữ cặp hợp lệ.
+        Thứ tự thử (2, 3, 1): phiếu viết theo kiểu DD/MM nên ưu tiên NGÀY 2 chữ số
+        trước ('108.206' là 10/8/2026, không phải 1/08); cặp vẫn được lọc hợp lệ nên
+        ngày một chữ số ('508' -> 5/08) không mất đi.
+        """
+        pairs: List[Tuple[str, str]] = []
+        if len(g) < 3:
+            return pairs
+        for cut in (2, 3, 1):
+            a, b = g[:cut], g[cut:cut + 2]
+            if len(b) < 1:
+                continue
+            pairs.append((a, b))
+        return pairs
+
+    @staticmethod
+    def _group_provenance(raw_text: str, dets: List[Dict]) -> List[bool]:
+        """
+        Với mỗi cụm số trong chuỗi OCR: cho biết nó NGHI LÀ chữ IN của trang
+        (chân trang 'tại Cơ sở GD/YT', đầu dòng 'Ngày:') hay là nét viết tay.
+        Một detection lẫn từ 2 chữ cái trở lên bên cạnh chữ số -> nghi vấn chữ IN.
+        Không đọc bằng được thứ tự cụm số thì trả 'không nghi vấn' (an toàn).
+        """
+        cleaned = re.sub(r"[^0-9/.\-: ]", " ", raw_text)
+        groups = [m.group(0) for m in re.finditer(r"\d+", cleaned)]
+        flags = [False] * len(groups)
+        k = 0
+        for d in dets:
+            gs = re.findall(r"\d+", d["text"])
+            suspect = sum(1 for ch in d["text"] if ch.isalpha()) >= 2
+            for j in range(len(gs)):
+                if k + j < len(flags):
+                    flags[k + j] = suspect
+            k += len(gs)
+        if k != len(groups):
+            return [False] * len(groups)
+        return flags
+
+    def _build_candidates(self, raw_text: str, dets: List[Dict], default_year: int) -> List[Dict]:
+        """
+        Sinh toi da 3 phuong an Ngay tu chuoi OCR, theo thu tu dang tin GIAM DAN.
+        Khong co buoc nao "tu che" Thang: moi cap (dd, mm) deu phai doc duoc tu anh.
+
+        basis:
+          'separator'  - 2 cum so co dau / . - phan cach ro rang  -> bang chung manh nhat
+          'adjacent'   - 2 cum so dung canh nhau tren cung dong OCR
+          'split'      - phai TACH mot cum so dinh nhau            -> suy doan, guessed
+          'prefix'     - lay cho dau cua cum dai (VD '8206' -> Thang 8) -> guessed
+          'confusable' - doi 1 chu so nham lan (1/7, 8/9, 2/0)      -> CHI GOI Y,
+                          khong bao gio duoc tu dong dien vao o
+        """
+        cleaned = re.sub(r"[^0-9/.\-: ]", " ", raw_text)
+        groups = [m.group(0) for m in re.finditer(r"\d+", cleaned)]
+        # Viền bảng đứng được OCR đọc thành chuỗi '1 1' / '1111': không có ngày nào
+        # chỉ gồm toàn số 1, nên coi là nét kẻ -> không sinh phương án nào cả.
+        non_year = [g for g in groups if not self._is_year_token(g)]
+        if non_year and all(set(g) <= {"1"} for g in non_year):
+            return []
+        group_suspect = self._group_provenance(raw_text, dets)
+        clean_groups = [g for g, s in zip(groups, group_suspect) if not s]
+        digit_scores = [d["score"] for d in dets if re.search(r"\d", d["text"])]
+        base = float(np.mean(digit_scores)) if digit_scores else 0.0
+
+        year = None
+        for g in groups:
+            if self._is_year_token(g):
+                year = int(g)
+                break
+        if year is None:
+            for g in groups:
+                if len(g) in (2, 3) and g.lstrip("0") in ("24", "25", "26", "27", "28", "29"):
+                    year = 2000 + int(g[-2:])
+                    break
+        year_from_prior = year is None
+        if year is None:
+            year = default_year
+
+        found: Dict[Tuple[int, int, int], Dict] = {}
+
+        def add(d_str: str, m_str: str, basis: str, factor: float):
+            if not d_str.isdigit() or not m_str.isdigit():
+                return
+            d_i, m_i = int(d_str), int(m_str)
+            if not (1 <= d_i <= self.MAX_DAY and 1 <= m_i <= self.MAX_MONTH):
+                return
+            key = (d_i, m_i, year)
+            cand = {
+                "day": d_i, "month": m_i, "year": year,
+                "date": f"{d_i:02d}/{m_i:02d}/{year}",
+                "basis": basis,
+                "guessed": basis in ("split", "prefix", "confusable"),
+                "year_from_period_prior": year_from_prior,
+                "score": round(base * factor, 4),
+                "src": (d_str, m_str),
+            }
+            if key not in found or cand["score"] > found[key]["score"]:
+                found[key] = cand
+
+        # 1) Có dấu phân cách rõ ràng giữa 2 cụm số
+        sep = re.search(r"(\d{1,2})\s*[/\.\-]\s*(\d{1,2})", cleaned)
+        if sep:
+            add(sep.group(1), sep.group(2), "separator", 1.0)
+
+        # 2) Hai cụm số đứng cạnh nhau (đã loại cụm Năm)
+        seq = [g for g in groups if not self._is_year_token(g)]
+        for i in range(len(seq) - 1):
+            add(seq[i], seq[i + 1], "adjacent", 0.9)
+
+        # 3) Chi khi 2 cach tren chua cho ket qua: tach cum so dinh / lay cho dau cum dai
+        if not found:
+            # Người viết dùng dấu '/', nhưng PaddleOCR đọc nét gạch chéo thành chữ số '1':
+            # '10/8/2024' -> '10181229'. Nhận diện dạng (Ngày)1(Tháng)1 trước khi tách thô.
+            for g in seq:
+                ms = re.match(r"^(\d{1,2})1(\d{1,2})1\d{2,4}$", g)
+                if ms:
+                    add(ms.group(1), ms.group(2), "split", 0.65)
+            for g in seq:
+                if self._is_year_token(g):
+                    continue
+                for a, b in self._split_merged_group(g):
+                    add(a, b, "split", 0.6)
+            # Vi du o #2: anh viet "10 8 2026" nhung OCR noi chay -> '10 8206'.
+            # Lay chu dau cua cum dai lam Thang, van giu nguyen cum Ngay doc duoc.
+            for i in range(len(seq) - 1):
+                d_grp, nxt = seq[i], seq[i + 1]
+                if len(d_grp) > 2 or len(nxt) < 3 or self._is_year_token(nxt):
+                    continue
+                for cut in (1, 2):
+                    add(d_grp, nxt[:cut], "prefix", 0.55)
+
+        # 4) Goi y nham lan chu so - chi chen vao cho con lai, khong bao gio dung dau danh sach
+        evidence = sorted(
+            (c for c in found.values() if c["basis"] != "confusable"),
+            key=lambda c: (self._BASIS_RANK.get(c["basis"], 9), -c["score"]),
+        )
+        if evidence:
+            seed = evidence[0]
+            for d_s, m_s in self._confusable_alternates(
+                f"{seed['day']:02d}", f"{seed['month']:02d}"
+            ):
+                add(d_s, m_s, "confusable", 0.35)
+
+        ranked = sorted(
+            found.values(), key=lambda c: (self._BASIS_RANK.get(c["basis"], 9), -c["score"])
+        )[:3]
+        # Cả 2 số của phương án chỉ đến từ đoạn OCR lẫn nhiều chữ IN -> đây là chữ in
+        # (chân trang, đầu dòng), không phải nét viết tay: vẫn giữ làm gợi ý
+        # nhưng tuyệt đối không tự điền vào ô.
+        def _tu_chu_viet_tay(tok: str) -> bool:
+            # Cụm số gốc có thể bị tách/prefix ('3007' -> 30/07) nên so sánh kiểu substring
+            return any(tok in g for g in clean_groups)
+
+        for c in ranked:
+            d_src, m_src = c.pop("src")
+            c["printed_suspect"] = not (_tu_chu_viet_tay(d_src) and _tu_chu_viet_tay(m_src))
+        return ranked
+
+    @classmethod
+    def _confusable_alternates(cls, day_s: str, month_s: str) -> List[Tuple[str, str]]:
+        """
+        Sinh cac phuong an "nham net" tu mot cap (Ngay, Thang) DA DOC DUOC TU ANH,
+        bang cach doi 1 chu so lấy sang chu so cung hay nham lan.
+        Thu tu sinh: trai -> phai, Ngay va Thang xen ke nhau de ca hai loai loi
+        deu con cho trong 3 goi y. Day la GOI Y cho nguoi dung bam chon,
+        khong phai ket luan cua AI - ket luan van phai dua tren chuoi OCR goc.
+        """
+        def variants(field_s: str, is_day: bool) -> List[str]:
+            """Chi giu bien the hop le ve Nguyen/Thang - bien vo nghia khong duoc chot cho goi y."""
+            out: List[str] = []
+            for pos in range(len(field_s)):
+                for rep in cls.CONFUSABLE_DIGITS.get(field_s[pos], ""):
+                    v = field_s[:pos] + rep + field_s[pos + 1:]
+                    if v == field_s or v in out:
+                        continue
+                    val = int(v)
+                    if is_day and not (1 <= val <= cls.MAX_DAY):
+                        continue
+                    if not is_day and not (1 <= val <= cls.MAX_MONTH):
+                        continue
+                    out.append(v)
+            return out
+
+        day_opts, month_opts = variants(day_s, True), variants(month_s, False)
+        alts: List[Tuple[str, str]] = []
+        for i in range(max(len(day_opts), len(month_opts))):
+            if i < len(day_opts):
+                alts.append((day_opts[i], month_s))
+            if i < len(month_opts):
+                alts.append((day_s, month_opts[i]))
+        return alts
+
     def clean_and_parse_datetime(
-        self, raw_text: str, default_year: int = 2026,
-        default_month: Optional[int] = None
-    ) -> Dict[str, Optional[str]]:
+        self, raw_text: str, default_year: int = 2026, dets: Optional[List[Dict]] = None
+    ) -> Dict:
         """
-        Phân tích chuỗi số OCR từ dòng Ngày (Hỗ trợ chuẩn các dạng: 24.07.2026, 24/07/2026, 24 07 2026).
-        Có khửi sửa nhầm lẫn ký tự và dùng Năm/Tháng "prior" từ thư mục Kỳ để cứu các trường hợp thiếu nét.
+        Chuyển chuỗi OCR thành phương án Ngày (kèm tối đa 3 gợi ý cho UI).
+        Không bao giờ điền Tháng/Năm suy đoán từ thư mục Kỳ vào ô trống.
         """
+        dets = dets or []
         result = {
             "date": None,
+            "candidates": [],
             "start_time": None,
             "end_time": None,
             "raw_ocr": raw_text.strip(),
-            "warning": None
+            "warning": None,
+            "confidence": 0.0,
         }
         if not raw_text or len(raw_text.strip()) < 2:
             return result
 
-        # 0. Sửa các chữ cái bị nhận nhầm thành số/trước khi phân tích
-        cleaned = self._repair_confused_chars(raw_text).strip()
-        if len(cleaned) < 2:
+        cands = self._build_candidates(raw_text, dets, default_year)
+        result["candidates"] = cands
+        if not cands:
             return result
 
-        # 1. Tách phần Năm ở cuối chuỗi
-        year = None
-        year_match = re.search(r'[/\-\.\s]*(202[4-9]|20[0-9]{2})\s*$', cleaned)
-        if not year_match:
-            # Năm bị viết/cắt cụt: "26", "026", "206"
-            year_match = re.search(r'[/\-\.\s]*(026|206|(?<=\D)(26|24|25))(?=\s*$)', cleaned)
-        if year_match:
-            y_token = re.sub(r'\D', '', year_match.group(1))
-            if len(y_token) == 4 and y_token.startswith("202"):
-                year = int(y_token)
-            elif y_token in ("026", "206", "26"):
-                year = 2026
-            elif y_token in ("24", "25"):
-                year = 2000 + int(y_token)
-            cleaned = cleaned[:year_match.start()].strip()
-
-        day, month = None, None
-
-        # 2. Bắt dạng có dấu phân cách rõ ràng ( '/', '.', '-' )
-        sep_match = re.search(r'(\d{1,2})\s*[/\-\.]+\s*(\d{1,2})', cleaned)
-        if sep_match:
-            d_cand, m_cand = int(sep_match.group(1)), int(sep_match.group(2))
-            if 1 <= d_cand <= 31 and 1 <= m_cand <= 12:
-                day, month = d_cand, m_cand
-            elif 1 <= m_cand <= 31 and 1 <= d_cand <= 12 and m_cand > 12:
-                # Người viết ghi Tháng trước Ngày hoặc OCR đảo 2 cụm số
-                day, month = m_cand, d_cand
-
-        # 3. Nếu không bắt được bằng dấu, gom các cụm số lại (hỗ trợ dấu chấm bị đọc thành khoảng trắng)
-        if day is None:
-            tokens = re.findall(r'\d+', cleaned)
-            if len(tokens) >= 2:
-                d_cand, m_cand = int(tokens[0]), int(tokens[1])
-                if 1 <= d_cand <= 31 and 1 <= m_cand <= 12:
-                    day, month = d_cand, m_cand
-                elif 1 <= m_cand <= 31 and 1 <= d_cand <= 12 and m_cand > 12:
-                    day, month = m_cand, d_cand
-                else:
-                    # Bỏ qua năm rò lại dưới dạng 2 số (VD: "24 07 26")
-                    tail = m_cand if m_cand > 31 else (d_cand if d_cand > 31 else None)
-                    head = m_cand if tail == d_cand else d_cand
-                    if tail is not None and 1 <= head <= 31:
-                        day, month = head, None
-            elif len(tokens) == 1 and len(tokens[0]) >= 3:
-                s = tokens[0]
-                if len(s) >= 4:
-                    d_cand, m_cand = int(s[:2]), int(s[2:4])
-                elif len(s) == 3:
-                    d_cand, m_cand = int(s[:1]), int(s[1:])
-                if 1 <= d_cand <= 31 and 1 <= m_cand <= 12:
-                    day, month = d_cand, m_cand
-                elif len(s) == 3 and 1 <= d_cand <= 1:
-                    # Dạng "DMM" bị nhòe dấu (VD: 1/11 -> 111)
-                    d_cand2, m_cand2 = int(s[:1]), int(s[1:])
-                    if 1 <= m_cand2 <= 12:
-                        day, month = d_cand2, m_cand2
-
-        # 3.5 Cứu tháng bị dính chữ số thừa (VD: '5/81 4' thực chất là '5/8/2024')
-        if day is not None and month is None:
-            tokens = re.findall(r'\d+', cleaned)
-            for i in range(len(tokens) - 1):
-                a = int(tokens[i])
-                b_str = tokens[i + 1]
-                if a == day and len(b_str) >= 2 and 13 <= int(b_str) <= 99:
-                    m_trunc = int(b_str[0])
-                    if 1 <= m_trunc <= 9:
-                        month = m_trunc
-                        result["warning"] = f"Tháng suy đoán từ '{b_str}', cần người dùng xác nhận"
-                        break
-
-        # 4. Cứu trường hợp chỉ đọc được Ngày (Tháng bị mờ/không viết):
-        #    mượn Tháng từ prior thư mục Kỳ nếu ô nằm trong kỳ đó
-        if day is not None and month is None and default_month:
-            month = default_month
-            result["warning"] = f"Tháng mượn từ kỳ ({default_month:02d}), cần người dùng xác nhận"
-        if year is None:
-            year = default_year
-
-        if day is not None and month is not None:
-            result["date"] = f"{day:02d}/{month:02d}/{year}"
-
+        best = cands[0]
+        if best.get("printed_suspect"):
+            # Chuỗi số nằm giữa đoạn chữ in (chân trang / đầu dòng) -> không có bằng chứng
+            # viết tay: trả về gợi ý để người dùng tự bấm, tuyệt đối không điền vào ô.
+            result["warning"] = ("Phát hiện chữ số trong đoạn chữ in, không chắc là viết tay "
+                                 "- vui lòng bấm chọn nếu đúng")
+            return result
+        result["date"] = best["date"]
+        result["confidence"] = best["score"]
+        if best["guessed"]:
+            result["warning"] = "Tháng/Ngày phải tách từ cụm số dính nhau - cần bạn bấm chọn lại nếu sai"
+        elif best["year_from_period_prior"]:
+            result["warning"] = f"Năm lấy từ thư mục Kỳ ({best['year']}), ảnh OCR không đọc được năm"
+        if len(cands) > 1:
+            others = ", ".join(c["date"] for c in cands[1:])
+            result["warning"] = (result["warning"] + " | " if result["warning"] else "") \
+                + f"Còn {len(cands) - 1} phương án khác: {others}"
         return result
 
     def _grayscale_fallback(self, roi_bgr: np.ndarray) -> np.ndarray:
@@ -376,57 +571,58 @@ class PDFGridOCREngine:
         return cv2.copyMakeBorder(upscaled, 24, 24, 24, 24, cv2.BORDER_CONSTANT, value=255)
 
     def read_date_from_cell(
-        self, cell_img: np.ndarray, ch: int, cw: int,
-        default_year: int, default_month: Optional[int]
+        self, cell_img: np.ndarray, ch: int, cw: int, default_year: int
     ) -> Dict:
         """
-        Khửi đọc Ngày 2 lớp cho 1 ô chấm công:
-        - Lớp 1: ROI chuẩn (y 19%-41%) + tách mực xanh (nhanh, chuẩn nhất cho bút xanh)
-        - Lớp 2: ROI mở rộng (y 15%-50%) + Grayscale Otsu (cứu ô viết lệch dòng/mực đen)
-        Trả về dict chứa date/raw_ocr/confidence/warning (lớp tốt nhất được chọn).
+        Đọc Ngày cho 1 ô chấm công, tối đa 2 lớp ROI:
+        - Lớp 1: band chuẩn DATE_BAND_Y (0.10-0.37) + tách mực xanh -> đúng nhất cho bút xanh
+        - Lớp 2: band rộng DATE_BAND_Y_ALT + Grayscale Otsu        -> cứu ô viết lệch dòng/mực đen
+        Trả về dict: date / candidates / raw_ocr / confidence / warning.
+        KHÔNG có tham số Tháng mặc định: thiếu Tháng thì ô đó thuộc diện cần người chọn.
         """
-        roi_variants = [
-            (int(ch * 0.19), int(ch * 0.41), int(ch * 0.0)),
-            (int(ch * 0.15), int(ch * 0.50), int(ch * 0.0)),
+        bands = [
+            (int(ch * self.DATE_BAND_Y[0]), int(ch * self.DATE_BAND_Y[1])),
+            (int(ch * self.DATE_BAND_Y_ALT[0]), int(ch * self.DATE_BAND_Y_ALT[1])),
         ]
-        rx1, rx2 = int(cw * 0.16), int(cw * 0.92)
+        rx1, rx2 = int(cw * self.DATE_BAND_X[0]), int(cw * self.DATE_BAND_X[1])
 
-        best = {"date": None, "start_time": None, "end_time": None,
+        best = {"date": None, "candidates": [], "start_time": None, "end_time": None,
                 "raw_ocr": "", "warning": None, "confidence": 0.0}
 
-        for idx, (ry1, ry2, _) in enumerate(roi_variants):
+        for band_idx, (ry1, ry2) in enumerate(bands):
             date_roi = cell_img[ry1:ry2, rx1:rx2]
             if date_roi.size == 0:
-                break
+                continue
 
-            if idx == 0:
+            if band_idx == 0:
                 has_hw, ocr_img = self.prepare_handwriting_roi(date_roi)
                 if not has_hw:
                     continue
             else:
                 ocr_img = self._grayscale_fallback(date_roi)
 
-            raw_text, conf = self.run_ocr_on_cell(ocr_img)
-            if conf < self.MIN_DATE_CONFIDENCE and not re.search(r'\d', raw_text):
+            raw_text, dets = self.run_ocr_on_cell(ocr_img)
+            if not re.search(r"\d", raw_text):
                 continue
 
-            parsed = self.clean_and_parse_datetime(raw_text, default_year, default_month)
-            score = conf if parsed["date"] else -1.0
-
-            if parsed["date"] and (best["date"] is None or score > best["confidence"]):
-                best.update(parsed)
-                best["confidence"] = round(float(conf), 4)
-            elif best["date"] is None and raw_text:
-                # Giữ lại chuỗi thô + confidence thấp nhất để báo cáo ô cần nhập tay
-                if parsed["raw_ocr"] and len(parsed["raw_ocr"]) > len(best["raw_ocr"]):
+            parsed = self.clean_and_parse_datetime(raw_text, default_year, dets)
+            if not parsed["date"]:
+                # Chỉ giữ chuỗi thô để người dùng nhìn thấy OCR đọc ra gì
+                if not best["candidates"] and len(raw_text) > len(best["raw_ocr"]):
                     best.update(parsed)
-                    best["confidence"] = round(float(conf), 4)
+                continue
 
-            if best["date"] and best["confidence"] >= self.CONFIDENCE_HIGH:
+            # Lớp 2 dùng Otsu cả vùng rộng -> dễ ăn thêm nét chữ ký, phạt nhẹ điểm
+            score = parsed["confidence"] * (1.0 if band_idx == 0 else 0.85)
+            if score > best["confidence"]:
+                best.update(parsed)
+                best["confidence"] = round(score, 4)
+
+            if best["confidence"] >= self.CONFIDENCE_HIGH:
                 break  # Đã đọc chắc chắn, khỏi chạy lớp dự phòng cho nhanh
 
-        # Ngày phải suy đoán (tháng mượn/dính nhiễu): hạ confidence để UI buộc người dùng soát
-        if best["date"] and best["warning"]:
+        # Bắt buộc tách cụm số dính -> kém chắc chắn: hạ điểm để UI buộc người dùng soát
+        if best["candidates"] and best["candidates"][0].get("guessed"):
             best["confidence"] = min(best["confidence"], self.CONFIDENCE_MED - 0.01)
 
         return best
@@ -442,6 +638,12 @@ class PDFGridOCREngine:
         mask = (((b - r) > 18) & (b > 45) & (b < 235)).astype(np.uint8) * 255
         # Khử nhiễu li ti của nền scan
         mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, np.ones((3, 3), np.uint8))
+
+        # Xóa nét KẺ BẢNG trước khi gom hàng: ở scan 300dpi, viền bảng đen ngả xanh
+        # đủ mạnh để lọt mask -> PaddleOCR đọc 2 đường kẻ dọc thành '1 1' -> bịa ra
+        # 01/01 cho ô TRỐNG. Đường kẻ có tỉ lệ rất dài/mỏng, chữ số viết tay thì không.
+        mask = self._drop_rule_lines(mask)
+
         mask = cv2.dilate(mask, np.ones((5, 5), np.uint8))
 
         row_profile = (mask > 0).sum(axis=1)
@@ -478,12 +680,35 @@ class PDFGridOCREngine:
         return boxed
 
     @staticmethod
+    def _drop_rule_lines(mask: np.ndarray) -> np.ndarray:
+        """Loại các connected component dạng đường thẳng (kẻ bảng, viền trang) khỏi mask mực xanh."""
+        n, _, stats, _ = cv2.connectedComponentsWithStats(mask, connectivity=8)
+        keep = np.zeros_like(mask)
+        for i in range(1, n):
+            x, y, w, h = (int(stats[i, cv2.CC_STAT_LEFT]), int(stats[i, cv2.CC_STAT_TOP]),
+                          int(stats[i, cv2.CC_STAT_WIDTH]), int(stats[i, cv2.CC_STAT_HEIGHT]))
+            is_vline = w <= 14 and h >= max(60, 4 * w)
+            is_hline = h <= 14 and w >= max(120, 4 * h)
+            if not (is_vline or is_hline):
+                keep[y:y + h, x:x + w] = mask[y:y + h, x:x + w]
+        return keep
+
+    @staticmethod
+    def _is_digit_dominant(raw_text: str, min_ratio: float = 0.6) -> bool:
+        """Chuỗi OCR có giống một ngày viết tay không: ký số phải chiếm áp đảo so với chữ cái."""
+        digits = sum(1 for ch in raw_text if ch.isdigit())
+        letters = sum(1 for ch in raw_text if ch.isalpha())
+        if digits == 0:
+            return False
+        return digits / float(digits + letters) >= min_ratio
+
+    @staticmethod
     def _looks_like_date_fragment(raw_text: str) -> bool:
         """Cụm số có dấu phân cách kiểu ngày/tháng (chưa đủ chuẩn vẫn ghi nhận để người dùng soát lại)."""
         return bool(re.search(r'\d{1,2}\s*[/\-.]\s*\d{1,2}', raw_text))
 
     def _process_session_sheets(
-        self, pdf_path: str, prefix: str, default_year: int, default_month: Optional[int]
+        self, pdf_path: str, prefix: str, default_year: int
     ) -> List[Dict]:
         """
         KIỂU B - Phiếu can thiệp từng buổi (mỗi trang 1-2 buổi, 'Buổi N ngày' + Ngày viết tay cột trái).
@@ -492,6 +717,7 @@ class PDFGridOCREngine:
         """
         doc = fitz.open(pdf_path)
         extracted_sessions = []
+        seq_no = 0   # mỗi trang có thể nhiều cụm -> đánh số thứ tự toàn file để không trùng nhau
         try:
             zoom = 300 / 72.0
             mat = fitz.Matrix(zoom, zoom)
@@ -505,18 +731,23 @@ class PDFGridOCREngine:
                 )
 
                 # Ngày viết tay chỉ xuất hiện ở cột 'Thời gian' (left ~35% bảng);
-                # chữ ký Phụ huynh ở cột giữa/dưới bị loại hoàn toàn khỏi danh sách cụm
+                # chữ ký Phụ huynh ở cột giữa/dưới bị loại hoàn toàn khỏi danh sách cụm.
+                # Trang không nhận dạng được khung bảng (geo=None) vẫn phải clip theo
+                # tỷ lệ TRANG, nếu không sẽ OCR cả dòng 'Mã số', số điện thoại, cột
+                # 'Nội dung' rồi bịa ra ngày từ mấy cụm số đó (đo trên CBP0005).
                 geo = self.analyze_page_geometry(img)
                 runs = self._blue_ink_row_runs(img)
                 if geo:
                     gx, gy, gw, gh = geo["rect"]
                     right_limit = gx + int(gw * 0.35)
-                    clipped = []
-                    for (ry1, ry2, rx1, rx2) in runs:
-                        if (rx1 + rx2) / 2.0 > right_limit:
-                            continue
-                        clipped.append((ry1, ry2, rx1, min(rx2, right_limit)))
-                    runs = clipped
+                else:
+                    right_limit = int(img.shape[1] * 0.32)
+                clipped = []
+                for (ry1, ry2, rx1, rx2) in runs:
+                    if (rx1 + rx2) / 2.0 > right_limit:
+                        continue
+                    clipped.append((ry1, ry2, rx1, min(rx2, right_limit)))
+                runs = clipped
 
                 page_results = []
                 for run_idx, (ry1, ry2, rx1, rx2) in enumerate(runs, start=1):
@@ -524,11 +755,18 @@ class PDFGridOCREngine:
                     has_hw, clean_blue = self.prepare_handwriting_roi(crop)
                     if not has_hw:
                         continue
-                    raw_text, conf = self.run_ocr_on_cell(clean_blue)
-                    parsed = self.clean_and_parse_datetime(raw_text, default_year, default_month)
+                    raw_text, dets = self.run_ocr_on_cell(clean_blue)
+                    parsed = self.clean_and_parse_datetime(raw_text, default_year, dets)
+                    if parsed["date"] and not self._is_digit_dominant(raw_text):
+                        # Cụm mực xanh chủ yếu là CHỮ (ghi chú, đầu trang) -> vài số lọt
+                        # vào không phải ngày: giữ gợi ý nhưng tuyệt đối không tự điền.
+                        parsed["date"] = None
+                        parsed["warning"] = ("Cụm viết chủ yếu là chữ, không đủ bằng chứng là ngày "
+                                             "- bấm chọn nếu một trong các gợi ý đúng")
                     if not parsed["date"] and not self._looks_like_date_fragment(raw_text):
                         continue  # chữ ký/nét viết khác, không phải ngày
-                    if parsed["date"] and parsed["warning"]:
+                    conf = parsed["confidence"]
+                    if parsed["date"] and parsed["candidates"] and parsed["candidates"][0]["guessed"]:
                         conf = min(conf, self.CONFIDENCE_MED - 0.01)  # buộc UI yêu cầu soát lại
 
                     snippet_name = f"{prefix}_p{page_idx + 1:02d}_{run_idx}.jpg"
@@ -536,8 +774,10 @@ class PDFGridOCREngine:
                     cv2.imwrite(snippet_path, crop)
 
                     page_results.append({
-                        "box_number": page_idx + 1,
+                        "box_number": (seq_no := seq_no + 1),
+                        "page": page_idx + 1,
                         "date": parsed["date"],
+                        "candidates": parsed["candidates"],
                         "start_time": parsed["start_time"],
                         "end_time": parsed["end_time"],
                         "raw_ocr": parsed["raw_ocr"],
@@ -550,8 +790,9 @@ class PDFGridOCREngine:
 
                 if not page_results:
                     page_results = self._session_band_fallback(
-                        img, page_idx, prefix, default_year, default_month
+                        img, page_idx, prefix, default_year, start_no=seq_no
                     )
+                    seq_no += len(page_results)
                 extracted_sessions.extend(page_results)
         finally:
             doc.close()
@@ -568,8 +809,8 @@ class PDFGridOCREngine:
         return extracted_sessions
 
     def _session_band_fallback(
-        self, page_img: np.ndarray, page_idx: int, prefix: str,
-        default_year: int, default_month: Optional[int]
+        self, page_img: np.ndarray, page_idx: int, prefix: str, default_year: int,
+        start_no: int = 0
     ) -> List[Dict]:
         """
         Dự phòng mực đen/xám: chia dải theo đường kẻ ngang, OCR Grayscale-Otsu cột 'Thời gian'.
@@ -603,21 +844,24 @@ class PDFGridOCREngine:
                 continue
 
             gray_img = self._grayscale_fallback(strip)
-            raw_text, conf = self.run_ocr_on_cell(gray_img, min_y_ratio=0.35)
+            raw_text, dets = self.run_ocr_on_cell(gray_img, min_y_ratio=0.35)
             if not re.search(r'\d{1,2}\s*[/\-.]\s*\d{1,2}\s*[/\-.]\s*\d{2,4}', raw_text):
                 continue
-            parsed = self.clean_and_parse_datetime(raw_text, default_year, default_month)
+            parsed = self.clean_and_parse_datetime(raw_text, default_year, dets)
             if not parsed["date"] or parsed["date"] in seen_dates:
                 continue
             seen_dates.add(parsed["date"])
+            conf = parsed["confidence"]
 
             snippet_name = f"{prefix}_p{page_idx + 1:02d}_fb{band + 1}.jpg"
             snippet_path = os.path.join(self.snippets_dir, snippet_name)
             cv2.imwrite(snippet_path, strip)
 
             results.append({
-                "box_number": page_idx + 1,
+                "box_number": start_no + len(results) + 1,
+                "page": page_idx + 1,
                 "date": parsed["date"],
+                "candidates": parsed["candidates"],
                 "start_time": parsed["start_time"],
                 "end_time": parsed["end_time"],
                 "raw_ocr": parsed["raw_ocr"],
@@ -634,18 +878,18 @@ class PDFGridOCREngine:
         - Trang cuối có lưới >=6 cột dọc -> KIỂU A (bảng chấm công 30 ô)
         - Ngược lại -> KIỂU B (phiếu can thiệp từng buổi, quét toàn bộ trang)
         """
-        default_year, default_month = self.parse_period_prior(period_folder)
+        default_year, _default_month = self.parse_period_prior(period_folder)
         if default_year is None:
             default_year = datetime.now().year
 
         page_img = self.render_last_page(pdf_path, dpi=300)
         geo = self.analyze_page_geometry(page_img)
         if geo is None or len(geo["v_lines"]) >= 6:
-            return self._process_grid_table(page_img, prefix, default_year, default_month)
-        return self._process_session_sheets(pdf_path, prefix, default_year, default_month)
+            return self._process_grid_table(page_img, prefix, default_year)
+        return self._process_session_sheets(pdf_path, prefix, default_year)
 
     def _process_grid_table(
-        self, page_img: np.ndarray, prefix: str, default_year: int, default_month: Optional[int]
+        self, page_img: np.ndarray, prefix: str, default_year: int
     ) -> List[Dict]:
         table_img = self.detect_30_cells_table(page_img)
         t_h, t_w = table_img.shape[:2]
@@ -673,9 +917,9 @@ class PDFGridOCREngine:
                 cell_img = table_img[y1:y2, x1:x2]
                 ch, cw = cell_img.shape[:2]
 
-                # Kiểm tra nhanh mực xanh toàn ô để bỏ ô trống (không tốn công OCR)
-                probe_y1, probe_y2 = int(ch * 0.19), int(ch * 0.41)
-                probe_x1, probe_x2 = int(cw * 0.16), int(cw * 0.92)
+                # Kiểm tra nhanh mực xanh đúng band dòng Ngày để bỏ ô trống (không tốn công OCR)
+                probe_y1, probe_y2 = int(ch * self.DATE_BAND_Y[0]), int(ch * self.DATE_BAND_Y[1])
+                probe_x1, probe_x2 = int(cw * self.DATE_BAND_X[0]), int(cw * self.DATE_BAND_X[1])
                 has_handwriting, _ = self.prepare_handwriting_roi(cell_img[probe_y1:probe_y2, probe_x1:probe_x2])
 
                 cv2.rectangle(debug_canvas, (x1, y1), (x2, y2), (230, 180, 0), 1)
@@ -690,12 +934,11 @@ class PDFGridOCREngine:
                 if not has_handwriting:
                     continue
 
-                # TỌA ĐỘ CHUẨN XÁC CỦA DÒNG NGÀY TRÊN PHIẾU + khửi đọc 2 lớp
-                parsed = self.read_date_from_cell(
-                    cell_img, ch, cw, default_year=default_year, default_month=default_month
-                )
+                # TỌA ĐỘ DÒNG NGÀY ĐO THỰC TẾ + khửi đọc 2 lớp
+                parsed = self.read_date_from_cell(cell_img, ch, cw, default_year=default_year)
 
-                snippet_display = cell_img[int(ch * 0.16):int(ch * 0.46), int(cw * 0.02):int(cw * 0.96)]
+                snippet_display = cell_img[int(ch * self.SNIPPET_BAND_Y[0]):int(ch * self.SNIPPET_BAND_Y[1]),
+                                           int(cw * self.DATE_BAND_X[0]):int(cw * self.DATE_BAND_X[1])]
                 snippet_name = f"{prefix}_box_{box_num:02d}.jpg"
                 snippet_path = os.path.join(self.snippets_dir, snippet_name)
                 cv2.imwrite(snippet_path, snippet_display)
@@ -703,6 +946,7 @@ class PDFGridOCREngine:
                 extracted_sessions.append({
                     "box_number": box_num,
                     "date": parsed["date"],
+                    "candidates": parsed["candidates"],
                     "start_time": parsed["start_time"],
                     "end_time": parsed["end_time"],
                     "raw_ocr": parsed["raw_ocr"],
