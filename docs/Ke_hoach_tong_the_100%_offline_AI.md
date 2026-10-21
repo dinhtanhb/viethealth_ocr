@@ -40,7 +40,7 @@ viethealth_ocr/                     # THƯ MỤC GỐC DỰ ÁN (trạng thái �
 │   ├── local_db.py                 # 3. SQLite: documents + sessions, migration an toàn, bảo toàn dữ liệu đã xác nhận
 │   └── excel_exporter.py           # 4. Xuất báo cáo .xlsx
 │
-├── web_app.py                      # GIAO DIỆN: Django single-file (settings in-process + HTML template inline)
+├── manage.py                      # GIAO DIỆN: Django single-file (settings in-process + HTML template inline)
 ├── docs/                           # Tài liệu thiết kế & kế hoạch
 ├── requirements.txt                # Danh sách thư viện cài đặt 1-click
 ├── setup_offline_models.py         # Script tải & đóng gói Model AI vào models_storage/paddlex/
@@ -49,7 +49,7 @@ viethealth_ocr/                     # THƯ MỤC GỐC DỰ ÁN (trạng thái �
 └── bench_accuracy.py              # DO CHINH XAC: EXACT (tu dien dung) vs TOP-N (dung trong goi y)
 ```
 
-> 📌 **Cập nhật so với kế hoạch ban đầu:** `excel_handler.py` → `excel_exporter.py`; thư mục `web_app/` → một file `web_app.py` duy nhất; model lưu ở `models_storage/paddlex/` thay vì `local_models/`; **EasyOCR → PaddleOCR** (xem [`Kien_truc_OCR_va_Quy_trinh_duyet.md`](./Kien_truc_OCR_va_Quy_trinh_duyet.md) mục 4–5). See [`AGENTS.md`](../AGENTS.md) for quy ước chi tiết.
+> 📌 **Cập nhật so với kế hoạch ban đầu:** `excel_handler.py` → `excel_exporter.py`; thư mục `web_app/` → một file `manage.py` duy nhất; model lưu ở `models_storage/paddlex/` thay vì `local_models/`; **EasyOCR → PaddleOCR** (xem [`Kien_truc_OCR_va_Quy_trinh_duyet.md`](./Kien_truc_OCR_va_Quy_trinh_duyet.md) mục 4–5). See [`AGENTS.md`](../AGENTS.md) for quy ước chi tiết.
 >
 > ⚠️ **Bài học đo lường:** con số "41/45 = 91.1%" từng báo cáo là **độ phủ** (đếm cả ô điền sai); benchmark độ phủ đó đã bị xóa. Từ giờ chỉ tin `bench_accuracy.py`, so với ngày do **người** đọc trên ảnh cắt.
 >

@@ -14,7 +14,7 @@ Tài liệu này ghi lại **các quy ước và cạm bẫy thực tế** đã 
 * **Phải dùng Python của venv**: `.\venv\Scripts\python.exe`. Python hệ thống không có `django` → `ModuleNotFoundError`.
 * **Chạy với `-X utf8`** khi có tiếng Việt: `.\venv\Scripts\python.exe -X utf8 ...`.
 * PowerShell **không hỗ trợ `&&`** → dùng `;`.
-* Chạy server: `.\venv\Scripts\python.exe web_app.py runserver 127.0.0.1:8031 --noreload`
+* Chạy server: `.\venv\Scripts\python.exe manage.py runserver 127.0.0.1:8031 --noreload`
   * ⚠️ `--noreload` nghĩa là **sửa code xong phải restart server** thì thay đổi mới có hiệu lực.
   * Tìm/đóng tiến trình chiếm port: `Get-NetTCPConnection -LocalPort 8031 -State Listen` → `Stop-Process -Id <pid> -Force`.
 * Kiểm tra độ chính xác: `bench_accuracy.py` (so với `benchmarks/ground_truth.json`) — in **EXACT** (tự điền đúng) và **TOP-N** (đúng nằm trong gợi ý) tách bạch.
@@ -50,7 +50,7 @@ Tài liệu này ghi lại **các quy ước và cạm bẫy thực tế** đã 
   ⚠️ Bất biến này **giữ nguyên cả khi hợp nhất nhiều lớp tiền xử lý**, và **kể cả khi** dùng prior "các buổi tăng dần theo thứ tự" để biện minh cho đáp án (đã đo: prior chuỗi đẩy được `CBP0005` ô#9 lên `24/08` tức 10/10, nhưng người dùng **chối** vì đó là tự điền một ngày AI chỉ *đoán*).
 * Phương án có `printed_suspect = True` (cả 2 số chỉ đến từ detection **lẫn ≥2 chữ cái** → nhiều khả năng là chữ in chân trang/đầu dòng) hoặc nằm trong cụm OCR **chủ yếu là chữ** (`_is_digit_dominant`) → `date = None`, chỉ còn gợi ý. Đây là luật chặn "bịa ngày từ chữ in", tuyệt đối không được nới.
 * Chuỗi chỉ toàn số `1` (`'1 1'`, `'1111'`) = **viền bảng đứng** bị OCR thành chữ số → loại outright, không sinh phương án.
-* Ngưỡng 🟢 cũng được lặp lại trong inline template của `web_app.py` — **sửa ở đây phải sửa ở đó**.
+* Ngưỡng 🟢 cũng được lặp lại trong inline template của `manage.py` — **sửa ở đây phải sửa ở đó**.
 
 ### 3.5. Django redirect, ký tự `&` và JS nhúng trong `HTML_TEMPLATE`
 * Message redirect chứa query string: **luôn dùng `urllib.parse.urlencode({...})`**. Ký tự `&` thô sẽ làm cắt thông báo từ điểm có `&` (lỗi đã gặp với dòng "AI tự đọc & điền Ngày").
@@ -59,13 +59,13 @@ Tài liệu này ghi lại **các quy ước và cạm bẫy thực tế** đã 
 * **Nhập tay bằng lịch 📅** (dòng AI không đọc được ngày): `openCal`/`calRender`/`calApply` trong `HTML_TEMPLATE` — lịch tháng tiếng Việt + ô `Giờ bắt đầu`/`Giờ kết thúc`, tự nhảy đúng tháng của `period`. Chỉ ghi `date_str`/`start_time`/`end_time` và tick ☑️ Xác nhận; **không được sửa `ocr_confidence`** (không gán điểm giả cho ngày con người nhập).
 
 ### 3.6. Công cụ sửa file
-* Trong `web_app.py`, thao tác replace trên các dòng chứa cú pháp template Django `{% ... %}` / `{{ ... }}` có thể **thất bại dù chuỗi khớp hệt**. Workaround: neo vào chuỗi con ASCII ngắn, hoặc viết lại toàn bộ file (file nhỏ).
+* Trong `manage.py`, thao tác replace trên các dòng chứa cú pháp template Django `{% ... %}` / `{{ ... }}` có thể **thất bại dù chuỗi khớp hệt**. Workaround: neo vào chuỗi con ASCII ngắn, hoặc viết lại toàn bộ file (file nhỏ).
 * Bộ đếm "+n/-n line" của tool edit **không đáng tin** — luôn Read lại để xác nhận trạng thái thật.
 
 ## 4. Cấu trúc & quy ước code
 
-* `core_engine/` là lõi **độc lập với web**: không import Django ở đó. Mọi thứ qua `web_app.py`.
-* `web_app.py` là **single-file app**: settings Django cấu hình in-process, HTML template nằm trong biến chuỗi `HTML_TEMPLATE`, URLconf là `urlpatterns` cuối file. Không tách thành package Django chuẩn.
+* `core_engine/` là lõi **độc lập với web**: không import Django ở đó. Mọi thứ qua `manage.py`.
+* `manage.py` là **single-file app**: settings Django cấu hình in-process, HTML template nằm trong biến chuỗi `HTML_TEMPLATE`, URLconf là `urlpatterns` cuối file. Không tách thành package Django chuẩn.
 * `core_engine` **không có `__init__.py`** (dùng implicit namespace package) — đừng thêm nếu chưa cần.
 * Đường dẫn mặc định được hardcode tương đối so với `BASE_DIR`: `models_storage/paddlex` (model), `media_snippets` (ảnh cắt), `viethealth_ocr.sqlite3` (DB), `exports/` (Excel).
 * Comment/docstring trong repo này viết **bằng tiếng Việt**, giữ nhất quán.

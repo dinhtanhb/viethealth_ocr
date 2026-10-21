@@ -106,7 +106,7 @@ Model được lưu tại `models_storage/paddlex/`. Sau bước này ứng dụ
 ### Chạy giao diện web
 
 ```powershell
-.\venv\Scripts\python.exe web_app.py runserver 127.0.0.1:8031 --noreload
+.\venv\Scripts\python.exe manage.py runserver 127.0.0.1:8031 --noreload
 ```
 
 Mở trình duyệt: <http://127.0.0.1:8031/>
@@ -169,7 +169,7 @@ So kết quả AI với **ground truth do người đọc tay** (`benchmarks/gro
 
 ```text
 viethealth_ocr/
-├── web_app.py                  # Django app 1-file: routes + inline HTML template + views
+├── manage.py                  # Django app 1-file: routes + inline HTML template + views
 ├── core_engine/
 │   ├── path_parser.py          # Bóc tách metadata (kỳ/nhóm/CB/trẻ/dịch vụ) từ đường dẫn OneDrive
 │   ├── pdf_grid_ocr.py         # Lõi OCR: phân tích hình học, 2 luồng Kiểu A / Kiểu B, chuẩn hóa ngày giờ
@@ -208,6 +208,6 @@ viethealth_ocr/
   0↔2) – chỉ để người dùng bấm, **không bao giờ được tự điền** kể cả khi prior "buổi tăng dần" ủng hộ nó.
 * **Năm chỉ lấy theo thư mục kỳ** khi ảnh OCR không đọc ra năm, và luôn kèm cảnh báo; Tháng **không** lấy từ kỳ.
 * **Paddle trên CPU bắt buộc `enable_mkldnn=False`**, nếu không crash `ConvertPirAttribute2RuntimeAttribute`.
-* **Lịch 📅 là JS tự chứa trong `web_app.py`** (không thư viện ngoài, không gọi mạng): lưới tháng tiếng Việt bắt đầu từ **T2**, ô giờ dùng `input[type=time]` của trình duyệt. Toàn bộ mã nằm trong `HTML_TEMPLATE` là chuỗi Python **không phải raw-string**, nên một cặp `\'` trong JS sẽ bị Python ăn mất và làm **chết cả khối `<script>`** (kể cả nút gợi ý cũ) — `test_ui_calendar.py` check parity dấu nháy để chặn đúng lỗi này; trong JS sinh HTML dùng `&#39;` thay vì `\'`.
+* **Lịch 📅 là JS tự chứa trong `manage.py`** (không thư viện ngoài, không gọi mạng): lưới tháng tiếng Việt bắt đầu từ **T2**, ô giờ dùng `input[type=time]` của trình duyệt. Toàn bộ mã nằm trong `HTML_TEMPLATE` là chuỗi Python **không phải raw-string**, nên một cặp `\'` trong JS sẽ bị Python ăn mất và làm **chết cả khối `<script>`** (kể cả nút gợi ý cũ) — `test_ui_calendar.py` check parity dấu nháy để chặn đúng lỗi này; trong JS sinh HTML dùng `&#39;` thay vì `\'`.
 * **Migration an toàn:** `local_db` tự `ALTER TABLE` thêm cột mới (VD `ocr_confidence`) mà không mất dữ liệu cũ.
 * **Unicode trên Windows:** đường dẫn tiếng Việt nên lấy qua `os.walk`; chạy Python với `-X utf8`.

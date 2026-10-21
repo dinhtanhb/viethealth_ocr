@@ -16,9 +16,9 @@ AI tự đọc **> 90%** ngày ghi trên PDF chấm công can thiệp (viết ta
 
 ```powershell
 # PowerShell không có '&&' -> dùng ';'
-.\venv\Scripts\python.exe web_app.py runserver 127.0.0.1:8031 --noreload   # UI: http://127.0.0.1:8031/
+.\venv\Scripts\python.exe manage.py runserver 127.0.0.1:8031 --noreload   # UI: http://127.0.0.1:8031/
 .\venv\Scripts\python.exe -X utf8 bench_accuracy.py              # do CHINH XAC: EXACT vs TOP-N (ground truth)
-.\venv\Scripts\python.exe -X utf8 -m py_compile web_app.py core_engine\local_db.py
+.\venv\Scripts\python.exe -X utf8 -m py_compile manage.py core_engine\local_db.py
 ```
 
 * **Bắt buộc dùng `.\venv\Scripts\python.exe`** — Python hệ thống không có `django`.
@@ -32,12 +32,12 @@ AI tự đọc **> 90%** ngày ghi trên PDF chấm công can thiệp (viết ta
 3. **Kiểu B: giới hạn vùng đọc đến đường kẻ dọc đầu tiên của bảng** (5–35% bề rộng khung), cắt dải theo **giao số** chứ không lọc theo tâm, và **bỏ trang nào không có kẻ dọc** trong khoảng đó (trang văn bản in). Thiếu ba bước này thì chữ ký/cột ghi chú bị đọc thành ngày → "buổi ảo".
 4. **Mọi PDF thật đều là scan thuần, không text layer.** Đường dẫn tiếng Việt phải lấy qua `os.walk` (không gõ tay — lệch Unicode NFC/NFD).
 5. **Message redirect phải dùng `urllib.parse.urlencode({...})`.** Ký tự `&` thô làm cắt cụt thông báo.
-6. **Ngưỡng tin cậy:** `CONFIDENCE_HIGH=0.60`, `CONFIDENCE_MED=0.40` (thang diem THAT cua PaddleOCR tren cum so; khong con `MIN_DATE_CONFIDENCE` cua EasyOCR). Phuong an `guessed` (tach cum so dinh / nho nham net chu so) bi ha xuong `CONFIDENCE_MED - 0.01` → UI bôi vàng dòng đó (`row-warn`) để bắt buộc người dùng soát; `confusable` không bao giờ được đứng slot 1 nên không bao giờ được tự điền. Do bang `bench_accuracy.py` voi ground truth do nguoi doc - khong do do phu. Ngưỡng 🟢 còn bị lặp trong `HTML_TEMPLATE` của `web_app.py` — sửa đồng bộ cả hai.
+6. **Ngưỡng tin cậy:** `CONFIDENCE_HIGH=0.60`, `CONFIDENCE_MED=0.40` (thang diem THAT cua PaddleOCR tren cum so; khong con `MIN_DATE_CONFIDENCE` cua EasyOCR). Phuong an `guessed` (tach cum so dinh / nho nham net chu so) bi ha xuong `CONFIDENCE_MED - 0.01` → UI bôi vàng dòng đó (`row-warn`) để bắt buộc người dùng soát; `confusable` không bao giờ được đứng slot 1 nên không bao giờ được tự điền. Do bang `bench_accuracy.py` voi ground truth do nguoi doc - khong do do phu. Ngưỡng 🟢 còn bị lặp trong `HTML_TEMPLATE` của `manage.py` — sửa đồng bộ cả hai.
 7. **Ô không đọc được ngày phải có lịch nhập tay, không bắt gõ `DD/MM/YYYY`.** Nút **📅 Chọn ngày & giờ** (`openCal`/`calApply` trong `HTML_TEMPLATE`) mở lịch tháng tiếng Việt **kèm Giờ bắt đầu / Giờ kết thúc**, tự nhảy tới đúng tháng của thư mục kỳ. Lịch chỉ ghi ngày/giờ + tick ☑️ Xác nhận, **không sửa `ocr_confidence`**. Cảnh báo kỹ thuật: `HTML_TEMPLATE` **không phải raw-string** nên `\'` trong JS bị Python ăn mất và làm chết cả khối `<script>` (dùng `&#39;`); sau khi sửa JS phải chạy `test_ui_calendar.py` **và** mở trang thật bằng browser để xác nhận hàm JS tồn tại.
 
 ## Kiến trúc nhanh
 
-* `web_app.py` — Django **single-file app**: settings in-process, template HTML trong biến chuỗi `HTML_TEMPLATE`, routes ở `urlpatterns`. Endpoint: `/`, `/scan/`, `/save-all/`, `/export-excel/`, `/snippet/<filename>`.
+* `manage.py` — Django **single-file app**: settings in-process, template HTML trong biến chuỗi `HTML_TEMPLATE`, routes ở `urlpatterns`. Endpoint: `/`, `/scan/`, `/save-all/`, `/export-excel/`, `/snippet/<filename>`.
 * `core_engine/` — lõi **không import Django**: `path_parser.py` (metadata từ đường dẫn OneDrive), `pdf_grid_ocr.py` (hình học + OCR + chuẩn hóa ngày giờ), `local_db.py` (SQLite + migration an toàn), `excel_exporter.py` (xuất .xlsx).
 * `core_engine` không có `__init__.py` (implicit namespace package).
 * Comment/docstring viết **bằng tiếng Việt**.
@@ -59,5 +59,5 @@ Không báo hoàn thành nếu thiếu bằng chứng thật:
 
 ## Công cụ sửa file (lưu ý thực tế)
 
-* Replace trên dòng chứa `{% ... %}` / `{{ ... }}` trong `web_app.py` có thể thất bại dù chuỗi khớp hệt → neo vào chuỗi con ASCII ngắn hoặc viết lại file.
+* Replace trên dòng chứa `{% ... %}` / `{{ ... }}` trong `manage.py` có thể thất bại dù chuỗi khớp hệt → neo vào chuỗi con ASCII ngắn hoặc viết lại file.
 * Bộ đếm "+n/−n line" của tool edit không đáng tin → **Read lại để xác nhận**.

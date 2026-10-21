@@ -30,7 +30,7 @@ PyMuPDF render 300 DPI ──► analyze_page_geometry() ──► PHÂN NHÁNH 
                    ▼
      local_db.save_document_and_sessions()  →  SQLite
                    ▼
-     web_app.py: bảng rà soát → người dùng xác nhận/sửa → save-all → export Excel
+     manage.py: bảng rà soát → người dùng xác nhận/sửa → save-all → export Excel
 ```
 
 ---
@@ -124,7 +124,7 @@ if best["date"] and best["warning"]:
     best["confidence"] = min(best["confidence"], self.CONFIDENCE_MED - 0.01)
 ```
 
-* Ngưỡng 🟢 bị **lặp lại trong `HTML_TEMPLATE`** của `web_app.py` — đổi hằng số phải đổi cả template.
+* Ngưỡng 🟢 bị **lặp lại trong `HTML_TEMPLATE`** của `manage.py` — đổi hằng số phải đổi cả template.
 * Bất biến này **giữ nguyên khi hợp nhất nhiều lớp tiền xử lý** (mục 3): `guessed`/`confusable` không bao giờ được đứng đầu và không bao giờ được tự điền, **kể cả khi** một prior bên ngoài (vd "các buổi phải tăng dần theo thứ tự") biện minh cho đáp án đó. Prior kiểu này đã đo được và **bị người dùng chối**.
 
 ---

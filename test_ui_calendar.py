@@ -2,7 +2,7 @@
 """
 Smoke test giao diện lịch chọn Ngày + Giờ (KHÔNG cần OCR, không cần browser).
 
-Render HTML_TEMPLATE của web_app.py với 2 dòng giả (1 dòng AI chưa đọc được ngày,
+Render HTML_TEMPLATE của manage.py với 2 dòng giả (1 dòng AI chưa đọc được ngày,
 1 dòng AI đã đọc) rồi kiểm tra:
   1) Nút 📅 có mặt trên mọi dòng, nổi bật ở dòng trống ngày;
   2) JS lịch nằm nguyên vẹn trong trang (hàm mở lịch, ô giờ BĐ/KT, tháng tiếng Việt);
@@ -19,7 +19,7 @@ import sys
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, BASE_DIR)
 
-import web_app  # cấu hình Django in-process (settings.configure)
+import manage  # cấu hình Django in-process (settings.configure)
 
 from django.template import Engine, Context
 
@@ -50,7 +50,7 @@ def script_blocks(html):
 
 
 def main():
-    html = Engine.get_default().from_string(web_app.HTML_TEMPLATE).render(
+    html = Engine.get_default().from_string(manage.HTML_TEMPLATE).render(
         Context({"records": fake_records(), "message": "", "last_path": ""}))
 
     checks = {
